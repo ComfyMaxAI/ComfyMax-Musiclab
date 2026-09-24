@@ -166,7 +166,7 @@ class Editor(QMainWindow, CorrectionPanel, ScenePanel, PhrasePanel):
         self.status.setWordWrap(True); layout.addWidget(self.status)
         self.content.setEnabled(False); self.save_button.setEnabled(False); self.save_as_button.setEnabled(False)
         action=QAction('Save project',self); action.setShortcut('Ctrl+S'); action.triggered.connect(lambda:self.save()); self.addAction(action)
-        self.timer=QTimer(self); self.timer.setInterval(33); self.timer.timeout.connect(self.tick); self.timer.start()
+        self.timer=QTimer(self); self.timer.setInterval(40); self.timer.timeout.connect(self.tick); self.timer.start()
         self.autosave=QTimer(self); self.autosave.setSingleShot(True); self.autosave.setInterval(1200); self.autosave.timeout.connect(lambda:self.save(silent=True))
         QApplication.instance().installEventFilter(self)
 
@@ -223,6 +223,7 @@ class Editor(QMainWindow, CorrectionPanel, ScenePanel, PhrasePanel):
         QMessageBox.warning(self,'Cannot open project',message)
 
     def loaded(self,result):
+        if self.transport: self.transport.close()
         if self.doc: self.doc.close()
         self.doc,arrays,self.peaks=result
         self.cancel_split()
@@ -455,7 +456,7 @@ class Editor(QMainWindow, CorrectionPanel, ScenePanel, PhrasePanel):
         if self.loading:
             QMessageBox.information(self,'Loading','Please wait for the current import/open to finish.'); event.ignore(); return
         if self.doc and not self.prepare_leave(): event.ignore(); return
-        if self.transport: self.transport.halt()
+        if self.transport: self.transport.close()
         if self.doc: self.doc.close()
         QApplication.instance().removeEventFilter(self)
         event.accept()
@@ -486,6 +487,8 @@ def legacy_main():
 
 
 def main():
+    from .audio import configure_playback_logging
+    configure_playback_logging(ROOT / '.cache' / 'playback.log')
     # The former lyrics editor remains preserved for project compatibility;
     # the public application now opens the independent manual marker editor.
     from .marker_app import main as marker_main

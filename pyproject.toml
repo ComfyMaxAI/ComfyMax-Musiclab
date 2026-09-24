@@ -7,7 +7,7 @@ name = "comfymax-audio-chunker"
 version = "0.1.0"
 description = "Local Demucs preparation and manual waveform marker editor"
 requires-python = ">=3.11,<3.12"
-dependencies = ["demucs==4.0.1", "faster-whisper==1.2.1", "numpy==2.2.6", "soundfile==0.13.1", "torch==2.8.0", "torchaudio==2.8.0"]
+dependencies = ["demucs==4.0.1", "faster-whisper==1.2.1", "numpy==2.2.6", "soundfile==0.13.1", "torch==2.8.0", "torchaudio==2.8.0", "librosa==0.11.0", "numba==0.61.2", "llvmlite==0.44.0"]
 
 [project.optional-dependencies]
 editor = ["PySide6==6.8.3", "sounddevice==0.5.3", "filelock>=3.13"]

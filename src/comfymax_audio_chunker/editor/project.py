@@ -90,10 +90,21 @@ def validate_state(data):
     if not isinstance(duration, (int, float)) or not math.isfinite(duration) or abs(duration-frames/rate) > 1/rate:
         raise ValueError('Invalid project duration')
     from .scenes import validate_cuts
+    if 'transcript' in data:
+        from .transcript import validate as validate_transcript
+        validate_transcript(data['transcript'],duration)
     validate_cuts(data.get('chunk_boundaries',[]),frames)
     if 'marker_editor' in data:
         from .markers import validate_marker_state
         validate_marker_state(data['marker_editor'],frames)
+    if 'music_analysis' in data:
+        from ..music.model import validate as validate_music
+        validate_music(data['music_analysis'], data['timeline'])
+        if 'sheet_sage' in data['music_analysis']:
+            from ..music.sheetsage import validate as validate_sheet
+            validate_sheet(data['music_analysis']['sheet_sage'])
+        if data['music_analysis']['analysis']['source_sha256'] != data['assets']['mix']['sha256']:
+            raise ValueError('Music analysis does not match the project MIX checksum')
     if not isinstance(data.get('scenes_initialized',False),bool):
         raise ValueError('Invalid scene initialization flag')
     from .lyrics_workflow import validate_history
@@ -175,6 +186,13 @@ class Document:
             new['saved_utc'] = datetime.now(timezone.utc).isoformat()
             validate_state(new)
             paths = [new['analysis']['path']] + [a['path'] for a in new['assets'].values()]
+            sheet = new.get('music_analysis', {}).get('sheet_sage')
+            if sheet:
+                for result in [sheet] + sheet.get('previous_results', []):
+                    for artifact in result['raw_artifacts']:
+                        if digest(inside(self.root, artifact['path'])) != artifact['sha256']:
+                            raise ValueError('SheetSage artifact checksum mismatch')
+                        paths.append(artifact['path'])
             for path in paths:
                 dest = inside(stage, path); dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(inside(self.root, path), dest)

@@ -1,10 +1,31 @@
 """Sample-bounded playback; the UI follows the device clock, not a timer."""
 from collections import deque
 from dataclasses import dataclass
-import threading
+import logging
+import math
+import time
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
+
+LOG = logging.getLogger(__name__)
+PLAYBACK_LATENCY = 0.20
+CALLBACK_SECONDS = 0.04
+
+
+def configure_playback_logging(path):
+    """Bounded diagnostic log, configured at app startup, never by the callback."""
+    from logging.handlers import RotatingFileHandler
+    path = path.resolve()
+    if any(getattr(handler, 'baseFilename', None) == str(path) for handler in LOG.handlers):
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(path, maxBytes=256*1024, backupCount=2, encoding='utf-8')
+        handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        LOG.addHandler(handler); LOG.setLevel(logging.INFO)
+    except OSError:
+        LOG.warning('Playback file logging unavailable; warnings still go to stderr.', exc_info=True)
 
 
 @dataclass
@@ -36,6 +57,8 @@ def load_audio(document):
         wave, rate = sf.read(document.root / asset['path'], dtype='float32', always_2d=True)
         if not np.all(np.isfinite(wave)):
             raise ValueError(f'{key} audio contains invalid samples')
+        if rate != document.data['timeline']['sample_rate'] or len(wave) != document.data['timeline']['frames']:
+            raise ValueError(f'{key} audio does not match the project sample clock')
         arrays[key] = np.ascontiguousarray(wave)
         # Preserve both channels' extrema, including anti-phase stereo.
         block = 256
@@ -48,34 +71,87 @@ def load_audio(document):
 
 class Transport:
     def __init__(self, arrays, rate):
+        if not arrays or 'mix' not in arrays or type(rate) is not int or rate <= 0:
+            raise ValueError('Playback needs a MIX and a positive sample rate.')
+        shape = arrays['mix'].shape
+        if len(shape) != 2 or shape[1] not in (1,2) or not shape[0]:
+            raise ValueError('Playback requires nonempty mono or stereo PCM.')
+        if any(a.shape != shape or a.dtype != np.float32 or not a.flags.c_contiguous for a in arrays.values()):
+            raise ValueError('Playback sources must share contiguous float32 PCM shape.')
         self.arrays, self.rate = arrays, rate
+        self.channels = shape[1]
+        # ~40–46 ms callbacks, with 200 ms requested device buffering. The
+        # default Studio 24c MME advertises 180 ms high-latency operation.
+        self.blocksize = max(64, 2 ** math.ceil(math.log2(rate * CALLBACK_SECONDS)))
+        self.requested_latency = PLAYBACK_LATENCY
+        self.callbacks = self.output_underflows = self.status_events = 0
+        self.max_callback_seconds = 0.0
+        self.actual_latency = None
+        self.last_status = ''
+        self._reported_status_events = 0
+        self._render_source = 'mix'
+        self._fade_frames = min(self.blocksize, max(1, round(rate * .005)))
+        self._fade = np.linspace(0, 1, self._fade_frames, dtype=np.float32)[:,None]
+        self._fade_out = 1-self._fade
+        self._mix_scratch = np.empty((self.blocksize, self.channels), np.float32)
+        self._fade_in = True
+        self._draining = False
         self.total = len(arrays['mix'])
         self.source = 'mix'
         self.volume = .7
         self.stream = None
         self.cursor = Cursor(0, self.total, 0)
-        self.anchors = deque(maxlen=1024)
-        self.guard = threading.Lock()
+        self.anchors = deque(maxlen=64)
         self.parked = 0
         self.active = False
         self.warning = ''
 
     def _callback(self, output, frames, timing, status):
-        with self.guard:
-            c = self.cursor
-            self.anchors.append((timing.outputBufferDacTime, c.frame, c.start, c.end, c.loop, frames))
-            c.render(self.arrays[self.source], output)
-            np.multiply(output, self.volume, out=output)
-            np.clip(output, -1., 1., out=output)
-            if status:
-                self.warning = str(status)
+        started = time.perf_counter()
+        if self._draining:
+            output.fill(0)
+            return
+        c = self.cursor
+        # Single callback writer; the GUI snapshots the deque under the GIL.
+        # No GUI-owned mutex, logging, disk access or decoding on this path.
+        self.anchors.append((timing.outputBufferDacTime, c.frame, c.start, c.end, c.loop, frames))
+        source = self.source
+        old = Cursor(c.start, c.end, c.frame, c.loop) if source != self._render_source else None
+        c.render(self.arrays[source], output)
+        if old is not None:
+            n = min(frames, self._fade_frames)
+            scratch = self._mix_scratch[:n]
+            old.render(self.arrays[self._render_source], scratch)
+            np.multiply(output[:n], self._fade[:n], out=output[:n])
+            np.multiply(scratch, self._fade_out[:n], out=scratch)
+            np.add(output[:n], scratch, out=output[:n])
+            self._render_source = source
+        if self._fade_in:
+            n = min(frames, self._fade_frames)
+            np.multiply(output[:n], self._fade[:n], out=output[:n])
+            self._fade_in = False
+        np.multiply(output, self.volume, out=output)
+        np.clip(output, -1., 1., out=output)
+        self.callbacks += 1
+        if status:
+            self.status_events += 1
+            self.output_underflows += int(status.output_underflow)
+            self.warning = self.last_status = str(status)
+        self.max_callback_seconds = max(self.max_callback_seconds, time.perf_counter()-started)
+
+    def diagnostics(self):
+        return dict(backend='sounddevice/PortAudio', sample_rate=self.rate, channels=self.channels,
+                    dtype='float32', blocksize=self.blocksize, block_seconds=self.blocksize/self.rate,
+                    requested_latency=self.requested_latency, actual_latency=self.actual_latency,
+                    callbacks=self.callbacks, output_underflows=self.output_underflows,
+                    status_events=self.status_events, last_status=self.last_status,
+                    max_callback_seconds=self.max_callback_seconds)
 
     def position(self):
         if not self.active or self.stream is None:
             return self.parked
         now = self.stream.time
-        with self.guard:
-            anchors = list(self.anchors)
+        anchors = tuple(self.anchors)
         candidates = [a for a in anchors if a[0] <= now]
         if not candidates:
             return self.parked
@@ -86,12 +162,18 @@ class Transport:
         return min(end, frame+elapsed)
 
     def halt(self):
+        was_active = self.active
         self.parked = self.position()
         self.active = False
+        if self.stream is not None and was_active:
+            self.stream.abort()  # Discard old queued sound; retain the open device.
+
+    def close(self):
+        self.halt()
         if self.stream is not None:
             old, self.stream = self.stream, None
-            old.abort()  # Flush queued samples before a seek/source change.
             old.close()
+        LOG.info('Playback closed: %s', self.diagnostics())
 
     def play(self, start, end, position=None, loop=False):
         start, end = max(0, int(start)), min(self.total, int(end))
@@ -103,17 +185,36 @@ class Transport:
         self.parked = position
         self.anchors.clear()
         self.warning = ''
+        self._render_source = self.source
+        self._fade_in = True
         try:
-            self.stream = sd.OutputStream(samplerate=self.rate, channels=2, dtype='float32',
-                                          blocksize=512, latency='low', callback=self._callback)
+            if self.stream is None:
+                self.stream = sd.OutputStream(samplerate=self.rate, channels=self.channels, dtype='float32',
+                                              blocksize=self.blocksize, latency=self.requested_latency,
+                                              callback=self._callback)
+                self.actual_latency = float(self.stream.latency)
+                LOG.info('Playback opened device=%s settings=%s', self.stream.device, self.diagnostics())
             self.active = True
             self.stream.start()
         except BaseException:
-            self.halt()
+            self.close()
             raise
 
     def pause(self):
-        self.halt()
+        if not self.active or self.stream is None:
+            return
+        # MME's estimated audible clock can lag the true output by a device
+        # period. Abort + rewind to that estimate repeats a short fragment.
+        # Freeze the PCM producer, drain the queued audio, then park at its
+        # exact sample tail. This trades at most the output buffer for accuracy.
+        self._draining = True
+        try:
+            self.stream.stop()
+            c = self.cursor
+            self.parked = c.start if c.loop and c.frame >= c.end else c.frame
+            self.active = False
+        finally:
+            self._draining = False
 
     def resume(self):
         c = self.cursor
@@ -135,8 +236,7 @@ class Transport:
             return
         # Both arrays share the exact sample clock. Switch on the existing
         # callback stream without seeking, flushing, or restarting playback.
-        with self.guard:
-            self.source = source
+        self.source = source  # Atomic reference swap; applied on the next callback.
 
     def set_loop(self, enabled):
         # Rebuild from the audible frame so queued old loop state is flushed.
@@ -147,6 +247,9 @@ class Transport:
             self.resume()
 
     def poll(self):
+        if self.status_events != self._reported_status_events:
+            self._reported_status_events = self.status_events
+            LOG.warning('Playback status: %s', self.diagnostics())
         pos = self.position()
         if self.active and not self.cursor.loop and pos >= self.cursor.end:
             self.halt()

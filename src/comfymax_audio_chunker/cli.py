@@ -84,17 +84,21 @@ def separate(mix, sr, out, device, offline):
     return vocals, device
 
 
-def transcribe(path, args, duration, active):
+def transcribe(path, args, duration, active, *, word_timestamps=True, raw_output=None):
     from faster_whisper import WhisperModel
     from .regions import overlap_fraction
     LOG.info("Transcribing vocals with %s on CPU (int8)", args.model)
     model = WhisperModel(args.model, device="cpu", compute_type="int8",
                          download_root=str(ROOT/".cache"/"whisper"), local_files_only=args.offline)
-    segments, info = model.transcribe(str(path), language=args.language, beam_size=5,
-                                     word_timestamps=True, vad_filter=False,
+    segments, info = model.transcribe(str(path), language=args.language, task='transcribe',
+                                     multilingual=False, initial_prompt=getattr(args,'initial_prompt',None), beam_size=5,
+                                     word_timestamps=word_timestamps, vad_filter=False,
                                      condition_on_previous_text=False)
     results, words = [], []
     for seg in segments:
+        if raw_output is not None:
+            from dataclasses import asdict
+            raw_output.append(asdict(seg))
         start, end = max(0., min(duration, seg.start)), max(0., min(duration, seg.end))
         # Speech-oriented no_speech_prob can be high even for clearly sung words.
         # Keep it as a diagnostic, but require poor decoding or weak acoustic
@@ -104,6 +108,8 @@ def transcribe(path, args, duration, active):
         results.append(dict(id=seg.id, start=start, end=end, text=seg.text.strip(),
                             avg_logprob=seg.avg_logprob, no_speech_prob=seg.no_speech_prob,
                             compression_ratio=seg.compression_ratio, suspect=bool(suspect)))
+        if getattr(seg,'temperature',None) is not None:
+            results[-1]['temperature']=seg.temperature
         for w in seg.words or []:
             a, b = max(0., min(duration, w.start)), max(0., min(duration, w.end))
             if b <= a:

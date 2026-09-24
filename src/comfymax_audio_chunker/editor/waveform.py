@@ -2,7 +2,7 @@
 import math
 import numpy as np
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QPainterPath
 from PySide6.QtWidgets import QWidget, QToolTip
 from .project import playable
 
@@ -69,6 +69,28 @@ class Waveform(QWidget):
         span = min(self.duration, max(1., self.span*factor))
         self.viewChanged.emit(max(0., min(center-span/2, self.duration-span)), span)
 
+    def draw_cached_samples(self, painter, center, amplitude):
+        a,span=self.visible_window(); width=max(1,self.width()-16)
+        key=(a,span,width,center,amplitude)
+        if getattr(self,'_sample_path_key',None)!=key or getattr(self,'_sample_path_source',None) is not self.peaks:
+            low,high,step=self.peaks; path=QPainterPath()
+            # Reduce only the visible, already-decoded peak bins in one NumPy
+            # operation. Follow used to cause thousands of tiny reductions/tick.
+            pixels=np.arange(width)
+            first=np.maximum(0,((a+span*pixels/width)/step).astype(np.int64))
+            last=np.minimum(len(low),np.maximum(first+1,((a+span*(pixels+1)/width)/step).astype(np.int64)))
+            valid=first<len(low)
+            if np.any(valid):
+                unique,inverse=np.unique(first[valid],return_inverse=True)
+                stop=int(last[valid][-1])
+                lows=np.minimum.reduceat(low[:stop],unique)[inverse]
+                highs=np.maximum.reduceat(high[:stop],unique)[inverse]
+                for pixel,lo,hi in zip(pixels[valid],lows,highs):
+                    path.moveTo(float(pixel+8),center-min(1,float(hi))*amplitude)
+                    path.lineTo(float(pixel+8),center-max(-1,float(lo))*amplitude)
+            self._sample_path=path; self._sample_path_key=key; self._sample_path_source=self.peaks
+        painter.drawPath(self._sample_path)
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor('#fafbfc'))
@@ -90,12 +112,7 @@ class Waveform(QWidget):
         low, high, step = self.peaks
         p.setPen(QPen(QColor('#216a78'), 1))
         width = max(1, self.width()-16)
-        for pixel in range(width):
-            first = max(0, int((a+span*pixel/width)/step))
-            last = min(len(low), max(first+1, int((a+span*(pixel+1)/width)/step)))
-            if first < len(low):
-                lo, hi = float(np.min(low[first:last])), float(np.max(high[first:last]))
-                p.drawLine(QPointF(pixel+8, center-min(1.,hi)*amp), QPointF(pixel+8,center-max(-1.,lo)*amp))
+        self.draw_cached_samples(p, center, amp)
         p.setPen(QColor('#596575'))
         target = span / max(2, width//110)
         tick = next((s for s in [.1,.2,.5,1,2,5,10,15,30,60,120,300,600,1800] if s>=target),3600)

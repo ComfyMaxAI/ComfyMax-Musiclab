@@ -117,3 +117,28 @@ Failures retain partial files for diagnosis. Interrupted runs do not resume; sta
 - PyTorch installation/builds: https://pytorch.org/get-started/locally/
 
 Model/package licenses should be reviewed before redistribution. Current scope is the local Stage 1 prototype only.
+
+## Optional SheetSage2 for testers
+
+Keep the application name **ComfyMax Audio Chunker** for this tester build.
+
+1. Unzip/clone this repository into a writable folder. Install the Windows/Python/FFmpeg
+   prerequisites above and run `setup.ps1` from that folder.
+2. Optional: double-click **Install_SheetSage.bat**. It installs audio.cpp and SheetSage2 inside
+   Audio Chunker, verifies downloads, and reuses an already valid installation. No separate
+   Audio.cpp installation or manual model-path configuration is needed.
+3. Allow about **3.55 GB downloads / 10 GB free installation space**. The SheetSage2 weights are
+   **CC BY-NC 4.0: non-commercial use only**. This tester path uses CUDA and requires a compatible
+   NVIDIA driver (validated on RTX 5060 Ti). See [component requirements and licenses](engines/sheetsage/README.md).
+4. Double-click **Launch Editor.cmd**. Open/import a song; in Music Analysis verify
+   **SheetSage2: Ready**, enable the optional SheetSage2 checkbox and click **Analyze Music**.
+   Saved ABC/events remain available even without the runtime installed.
+5. Without SheetSage, the editor and normal Music Analysis still work. Fresh installs use the
+   existing librosa/template defaults; optional Beat-Transformer/CNN developer configurations
+   are not bundled by this SheetSage installer. Saved neural evidence remains readable.
+6. Report issues at [GitHub Issues](https://github.com/ComfyMaxAI/ComfyMax-Audio-Chunker/issues).
+   Include Windows/GPU/driver details, the installer error or SheetSage runtime logs and steps
+   to reproduce. Review logs for private local paths before sharing; do not upload private audio.
+
+No model, downloaded runtime, user audio, project or cache should be committed. This is a
+source-plus-installer tester distribution, not a prebuilt application or a commercial model license.

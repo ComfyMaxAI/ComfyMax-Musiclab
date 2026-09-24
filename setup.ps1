@@ -30,5 +30,5 @@ Run-Checked $PythonExe @('-m','pip','install','torch==2.8.0','torchaudio==2.8.0'
 Run-Checked $PythonExe @('-m','pip','install','-e','.[editor]')
 Run-Checked $PythonExe @('-m','pip','check')
 Run-Checked $PythonExe @('-m','unittest','discover','-s','tests','-v')
-& $PythonExe -m pip freeze | Set-Content -Encoding UTF8 'installed-versions.txt'
-Write-Host 'Ready. Run: .\analyze.ps1 -Song "D:\Music\your-song.wav"'
+& $PythonExe -m pip freeze | ForEach-Object { if ($_ -match '^-e ') { '-e .' } else { $_ } } | Set-Content -Encoding UTF8 'installed-versions.txt'
+Write-Host 'Ready. Run Launch Editor.cmd. Optional SheetSage2 support: Install_SheetSage.bat.'

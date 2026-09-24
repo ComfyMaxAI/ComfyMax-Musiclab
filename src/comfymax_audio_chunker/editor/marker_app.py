@@ -18,6 +18,9 @@ from .markers import (initial_state,boundaries,intervals,created_scenes,scenes_c
                       add_marker,move_marker,delete_marker,validate_marker_state,set_interval_type,add_automatic_markers)
 from .interval_types import VocalActivity,TYPES
 from .theme import apply_theme
+from .music_panel import MusicPanel
+from .follow import follow_start
+from .transcript_panel import TranscriptPanel
 from .exporter import export_project,validate_scenes,ExportValidationError
 
 ROOT=Path(__file__).resolve().parents[3]
@@ -73,7 +76,7 @@ def separate_song(song,destination):
     return open_audio(run/'analysis.json',destination)
 
 
-class MarkerEditor(QMainWindow):
+class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
     def __init__(self):
         super().__init__(); apply_theme(self); self.doc=None; self.transport=None; self.peaks={}; self.selected_marker=None
         self.dirty=False; self.busy=False; self.jobs=[]; self.history=QUndoStack(self)
@@ -89,12 +92,22 @@ class MarkerEditor(QMainWindow):
         controls=QHBoxLayout(); self.play_button=self.button(controls,'Play',self.toggle)
         self.source=QComboBox(); self.source.addItem('Full Mix','mix'); self.source.currentIndexChanged.connect(self.switch_source); controls.addWidget(self.source)
         self.loop=QCheckBox('Loop audition'); self.loop.toggled.connect(self.loop_changed); controls.addWidget(self.loop)
+        self.follow_playhead=QCheckBox('Follow Playhead'); self.follow_playhead.setChecked(True)
+        self.follow_playhead.setToolTip('Follow the audio clock at 45% of the window. Manual zoom, pan or Fit song switches Follow off; enable it again to resume.')
+        controls.addWidget(self.follow_playhead)
         controls.addStretch(); self.clock=QLabel('00:00.000000'); controls.addWidget(self.clock)
         controls.addWidget(QLabel('Volume')); self.volume=QSlider(Qt.Horizontal); self.volume.setRange(0,100); self.volume.setValue(70); self.volume.setMaximumWidth(110)
         self.volume.valueChanged.connect(self.volume_changed); controls.addWidget(self.volume); body.addLayout(controls)
         self.overview=MarkerWaveform(True); self.overview.setMaximumHeight(90); body.addWidget(self.overview)
         splitter=QSplitter(Qt.Vertical); waves=QWidget(); wl=QVBoxLayout(waves); wl.setContentsMargins(0,0,0,0)
         zoom=QHBoxLayout(); zoom.addWidget(QLabel('Click to seek • drag an amber marker to move it')); zoom.addStretch()
+        zoom.addWidget(QLabel('Chords:'))
+        self.chord_source=QComboBox(); self.chord_source.addItems(['Final','CNN raw','Template'])
+        self.chord_source.setEnabled(False)
+        self.chord_source.setAccessibleName('Displayed chord source')
+        self.chord_source.setToolTip('Display saved evidence only. Purple dashed lines are downbeats, not markers.\nCNN raw preserves original neural timing; no analysis or snapping is performed.')
+        self.chord_source.currentTextChanged.connect(self.set_chord_source)
+        zoom.addWidget(self.chord_source)
         self.button(zoom,'Zoom −',lambda:self.detail.zoom(1.5)); self.button(zoom,'Zoom +',lambda:self.detail.zoom(2/3))
         self.button(zoom,'Fit song',lambda:self.set_view(0,self.doc.duration)); wl.addLayout(zoom)
         self.detail=MarkerWaveform(); wl.addWidget(self.detail,1); splitter.addWidget(waves)
@@ -142,14 +155,13 @@ class MarkerEditor(QMainWindow):
         self.scene_table=self.table(['Scene','Start','End','Duration','Type','Warning']); sl.addWidget(self.scene_table,1)
         self.scene_table.cellDoubleClicked.connect(lambda *_:self.play_scene()); self.tabs.addTab(scenes,'Scenes')
         optional=QHBoxLayout(); self.transcript_toggle=QCheckBox('Show transcript (optional listening aid)'); self.transcript_toggle.toggled.connect(self.show_transcript); optional.addWidget(self.transcript_toggle); optional.addStretch(); body.addLayout(optional)
-        self.transcript_pane=QWidget(); tl=QVBoxLayout(self.transcript_pane); tl.addWidget(QLabel('Read-only reference. Text and review states do not affect markers or scenes. Double-click a row to listen.'))
-        self.transcript_table=self.table(['Start','End','Existing transcript / corrected text']); tl.addWidget(self.transcript_table)
-        self.transcript_table.cellDoubleClicked.connect(self.play_transcript)
+        self.build_transcript()
+        self.build_music(header)
         self.progress=QProgressBar(); self.progress.setRange(0,0); self.progress.hide(); layout.addWidget(self.progress)
         self.status=QLabel('Load a song for local Demucs separation, or open an existing project.'); self.status.setWordWrap(True); layout.addWidget(self.status)
         self.content.setEnabled(False); self.save_button.setEnabled(False); self.save_as_button.setEnabled(False)
         self.autosave=QTimer(self); self.autosave.setSingleShot(True); self.autosave.setInterval(1200); self.autosave.timeout.connect(lambda:self.save(True))
-        self.timer=QTimer(self); self.timer.setInterval(33); self.timer.timeout.connect(self.tick); self.timer.start()
+        self.timer=QTimer(self); self.timer.setInterval(40); self.timer.timeout.connect(self.tick); self.timer.start()
         for key,slot in [('Ctrl+S',lambda:self.save()),('Ctrl+Z',self.history.undo),('Ctrl+Y',self.history.redo),('Space',self.toggle),('M',self.add_at_playhead),('Escape',self.stop)]:
             action=QAction(self); action.setShortcut(key); action.triggered.connect(lambda checked=False,s=slot,k=key:self.shortcut(k,s)); self.addAction(action)
 
@@ -208,11 +220,13 @@ class MarkerEditor(QMainWindow):
         self.stop(); self.run_task(lambda:open_audio(path,destination),self.loaded,'Opening audio and waveform…')
 
     def loaded(self,result):
+        if self.transport: self.transport.close()
         if self.doc: self.doc.close()
         self.doc,arrays,self.peaks=result[:3]
         self.classifier=result[3] if len(result)>3 else VocalActivity(arrays,self.doc.data['timeline']['sample_rate'])
         self.doc.data['marker_editor']=initial_state(self.doc.data,self.classifier)
         self.transport=Transport(arrays,self.doc.data['timeline']['sample_rate']); settings=self.doc.data['settings']
+        self.follow_playhead.setChecked(settings.get('follow_playhead',True))
         self.history.clear(); self.selected_marker=0
         self.source.blockSignals(True); self.source.clear(); self.source.addItem('Full Mix','mix')
         if 'vocals' in arrays: self.source.addItem('Vocals','vocals')
@@ -228,12 +242,8 @@ class MarkerEditor(QMainWindow):
             wave.doc=self.doc; wave.peaks=self.peaks[self.transport.source]; wave.context=None; wave.position=self.transport.parked/self.transport.rate
             wave.set_view(self.doc.data['view'].get('start',0),self.doc.data['view'].get('span',30))
         self.title.setText(self.doc.data['title']); self.setWindowTitle('ComfyMax Audio Chunker — '+self.doc.data['title'])
-        self.transcript_table.setRowCount(len(self.doc.phrases))
-        for i,p in enumerate(self.doc.phrases):
-            text=p.get('corrected_text'); text=p.get('original_text','') if text is None else text
-            for col,value in enumerate((str(p.get('start')),str(p.get('end')),text)):
-                item=QTableWidgetItem(value); item.setToolTip(value); self.transcript_table.setItem(i,col,item)
-        self.sync_navigation(); self.tabs.setCurrentIndex(0); self.refresh(); self.set_busy(False)
+        self.refresh_transcript()
+        self.sync_navigation(); self.tabs.setCurrentIndex(0); self.refresh(); self.refresh_music(); self.set_busy(False)
         self.autosave.stop(); self.dirty=False
         self.status.setText('Recovered saved project. Save to retain it.' if self.doc.recovered else 'Ready. Markers alone define scene boundaries; press Create Scenes when ready.')
 
@@ -343,6 +353,7 @@ class MarkerEditor(QMainWindow):
         if self.doc and row>=0: self.select_marker(boundaries(self.state,self.transport.total)[row])
 
     def drag_marker(self,old,new):
+        if self.busy: return
         self.edit(lambda:move_marker(self.state,old,new,self.transport.total,self.classifier),'move marker')
         if new in self.state['markers']: self.select_marker(new)
 
@@ -377,7 +388,8 @@ class MarkerEditor(QMainWindow):
         elif not visible and index>=0: self.tabs.removeTab(index)
 
     def play_transcript(self,row,column=0):
-        p=self.doc.phrases[row]
+        if column==2 or not self.transcript_draft: return
+        p=self.transcript_draft['lyrics']['segments'][row]
         if playable(p,self.doc.duration): self.play_range(round(p['start']*self.transport.rate),round(p['end']*self.transport.rate))
 
     def audio_action(self,operation):
@@ -390,8 +402,9 @@ class MarkerEditor(QMainWindow):
         if self.transport: self.transport.halt()
     def seek(self,seconds):
         if self.transport: self.audio_action(lambda:self.transport.seek(round(seconds*self.transport.rate)))
-    def set_view(self,start,span):
+    def set_view(self,start,span,automatic=False):
         if self.doc:
+            if not automatic: self.follow_playhead.setChecked(False)
             for wave in (self.detail,self.overview): wave.set_view(start,span)
             self.sync_navigation()
     def sync_navigation(self):
@@ -419,11 +432,14 @@ class MarkerEditor(QMainWindow):
     def volume_changed(self,value):
         if self.transport: self.transport.volume=value/100; self.changed()
     def tick(self):
-        if not self.transport or self.busy: return
+        if not self.transport or (self.busy and not self.music_job and not self.transcript_job): return
         try: frame=self.transport.poll()
         except Exception as exc: self.status.setText('Audio device unavailable: '+str(exc)); return
         self.clock.setText(f'{exact_time(frame/self.transport.rate)} / {exact_time(self.doc.duration)}')
         self.play_button.setText('Pause' if self.transport.active else 'Play')
+        if self.transport.active and self.follow_playhead.isChecked() and self.detail.marker_drag is None:
+            start=follow_start(frame/self.transport.rate,self.detail.start,self.detail.span,self.doc.duration)
+            if start!=self.detail.start: self.set_view(start,self.detail.span,automatic=True)
         for wave in (self.detail,self.overview): wave.position=frame/self.transport.rate; wave.update()
         if self.transport.warning: self.status.setText('Audio device: '+self.transport.warning); self.transport.warning=''
 
@@ -431,7 +447,7 @@ class MarkerEditor(QMainWindow):
         if self.doc and not self.busy: self.dirty=True; self.status.setText('Unsaved changes'); self.autosave.start()
     def collect(self):
         self.doc.data['settings'].update(source=self.transport.source,loop=self.loop.isChecked(),volume=self.volume.value()/100,
-                                         marker_before=self.before.value(),marker_after=self.after.value())
+                                         marker_before=self.before.value(),marker_after=self.after.value(),follow_playhead=self.follow_playhead.isChecked())
         self.doc.data['view'].update(position=self.transport.position()/self.transport.rate,start=self.detail.start,span=self.detail.span)
     def save(self,silent=False):
         if not self.doc or self.busy: return False
@@ -444,6 +460,7 @@ class MarkerEditor(QMainWindow):
             return False
     def choose_save_as(self):
         if not self.doc: return
+        if not self.resolve_lyrics_draft(): return
         dest,_=QFileDialog.getSaveFileName(self,'Save as new project folder',str(self.doc.root.parent/'Song-copy.comfymax'),'Project folder (*.comfymax)')
         if not dest: return
         self.autosave.stop(); self.collect(); self.stop(); self.run_task(lambda:self.doc.save_as(dest),self.saved_as,'Saving project copy…')
@@ -453,6 +470,7 @@ class MarkerEditor(QMainWindow):
         self.dirty=False; self.history.setClean(); self.set_busy(False,'Saved • '+str(doc.root))
     def prepare_leave(self):
         if not self.doc: return True
+        if not self.resolve_lyrics_draft(): return False
         self.autosave.stop()
         if self.dirty or self.doc.recovered:
             answer=QMessageBox.question(self,'Unsaved changes','Save this project before leaving?',QMessageBox.Save|QMessageBox.Discard|QMessageBox.Cancel,QMessageBox.Save)
@@ -466,12 +484,14 @@ class MarkerEditor(QMainWindow):
     def closeEvent(self,event):
         if self.busy: QMessageBox.information(self,'Working','Please wait for audio preparation or saving to finish.'); event.ignore(); return
         if not self.prepare_leave(): event.ignore(); return
-        self.stop()
+        if self.transport: self.transport.close()
         if self.doc: self.doc.close()
         event.accept()
 
 
 def main():
+    from .audio import configure_playback_logging
+    configure_playback_logging(ROOT / '.cache' / 'playback.log')
     parser=argparse.ArgumentParser(description='ComfyMax — manual waveform markers')
     parser.add_argument('project',nargs='?',type=Path); parser.add_argument('--import-analysis',type=Path); parser.add_argument('--destination',type=Path)
     args=parser.parse_args()

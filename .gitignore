@@ -29,3 +29,19 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Optional managed SheetSage downloads, never source distribution
+engines/sheetsage/runtime/
+models/sheetsage2/
+*.gguf
+*.part
+*.comfymax/
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+*.aiff
+*.aac
+# Local validation reports contain machine-specific test paths; not release source
+Phase-*-rapport.md

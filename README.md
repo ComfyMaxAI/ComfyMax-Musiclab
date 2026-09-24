@@ -1,17 +1,19 @@
-# ComfyMax Audio Chunker
+# ComfyMax MusicLab
 
-The current application is a manual waveform marker editor: **Load Song → local Demucs separation → edit markers → Create Scenes → Export Scenes**. Markers alone define boundaries; lyrics and review states have no authority. See **MARKER_EDITOR.md** for current instructions. Export uses Demucs vocals for every scene; Vocal/Instrumental remains metadata only. See **EXPORT_SCENES.md**.
+**ComfyMax MusicLab** is a local music-analysis and scene-preparation workspace built around a waveform editor. It combines manual markers and scene creation with optional music analysis, chord/downbeat visualization, editable Whisper lyrics, and SheetSage2 symbolic transcription. Processing stays local; the application is designed to work without cloud credits.
 
-Each interval has an editable Vocal/Instrumental Type, initially suggested from the available vocal stem. Manual choices persist and are copied into scenes only when Create Scenes is selected. Types never move boundaries.
+The marker workflow remains **Load Song → local Demucs separation → edit markers → Create Scenes → Export Scenes**. Markers define scene boundaries. Each interval has an editable Vocal/Instrumental Type, initially suggested from the available vocal stem; manual choices persist and are copied into scenes when Create Scenes is selected.
 
-Double-click `Launch Editor.cmd`. Existing projects open directly; Load Song now runs Demucs without transcription. Previous lyric-alignment and proposal documentation is historical. The application retains old project evidence but no longer exposes those workflows in the main interface. It uses a dedicated Python 3.11 environment, separate from ComfyUI; a packaged executable is not yet provided.
+Music Analysis is an additional layer and does not take control of manual scene boundaries. Current analysis features include rhythm/downbeat information, chord analysis and visualization, Transcript Aid with editable lyrics, and optional SheetSage2 ABC/event transcription. SheetSage2 is installed separately with the included `Install_SheetSage.bat` because its model/runtime are too large to store in Git.
+
+Double-click `Launch Editor.cmd` to start the application. Existing projects open directly. MusicLab uses a dedicated Python 3.11 environment, separate from ComfyUI; a packaged executable is not yet provided.
 
 ## Install on Windows 10 (64-bit)
 
 Prerequisites: FFmpeg and ffprobe on PATH; either Python **3.11** with the `py` launcher, or `uv` available on PATH. Python 3.14 is not used. If you do not have uv, install Python 3.11 from https://www.python.org/downloads/release/python-3119/ (Windows installer, 64-bit) and rerun setup. No administrator shell is required.
 
 ```powershell
-Set-Location D:\ComfyMax-Audio-Chunker
+Set-Location D:\ComfyMax-MusicLab
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
@@ -28,7 +30,7 @@ Choose this at initial setup; changing an existing environment's CPU/CUDA flavor
 ## Analyse a real song
 
 ```powershell
-Set-Location D:\ComfyMax-Audio-Chunker
+Set-Location D:\ComfyMax-MusicLab
 powershell -NoProfile -ExecutionPolicy Bypass -File .\analyze.ps1 -Song "D:\Music\my song.wav" -Language en
 ```
 
@@ -37,7 +39,7 @@ WAV, FLAC, MP3 and other formats FFmpeg can decode are accepted. Omit `-Language
 By default, output goes to a new timestamped directory under `runs`. For a named output directory:
 
 ```powershell
-.\analyze.ps1 -Song "D:\Music\my song.flac" -Output "D:\ComfyMax-Audio-Chunker\runs\song-test-01" -Device cpu
+.\analyze.ps1 -Song "D:\Music\my song.flac" -Output "D:\ComfyMax-MusicLab\runs\song-test-01" -Device cpu
 ```
 
 The output folder **must not already exist**. Reruns need a new folder; the app refuses to overwrite an earlier run. If script policy blocks this command, use the `powershell -NoProfile -ExecutionPolicy Bypass -File` form above.
@@ -116,16 +118,14 @@ Failures retain partial files for diagnosis. Interrupted runs do not resume; sta
 - faster-whisper: https://github.com/SYSTRAN/faster-whisper
 - PyTorch installation/builds: https://pytorch.org/get-started/locally/
 
-Model/package licenses should be reviewed before redistribution. Current scope is the local Stage 1 prototype only.
+Model/package licenses should be reviewed before redistribution. Review the component licenses before redistribution, especially the non-commercial SheetSage2 model license described below.
 
-## Optional SheetSage2 for testers
-
-Keep the application name **ComfyMax Audio Chunker** for this tester build.
+## Install optional SheetSage2
 
 1. Unzip/clone this repository into a writable folder. Install the Windows/Python/FFmpeg
    prerequisites above and run `setup.ps1` from that folder.
-2. Optional: double-click **Install_SheetSage.bat**. It installs audio.cpp and SheetSage2 inside
-   Audio Chunker, verifies downloads, and reuses an already valid installation. No separate
+2. Optional: double-click **Install_SheetSage.bat**. It installs the required audio.cpp runtime and SheetSage2 model inside
+   ComfyMax MusicLab, verifies downloads, and reuses an already valid installation. No separate
    Audio.cpp installation or manual model-path configuration is needed.
 3. Allow about **3.55 GB downloads / 10 GB free installation space**. The SheetSage2 weights are
    **CC BY-NC 4.0: non-commercial use only**. This tester path uses CUDA and requires a compatible
@@ -136,7 +136,7 @@ Keep the application name **ComfyMax Audio Chunker** for this tester build.
 5. Without SheetSage, the editor and normal Music Analysis still work. Fresh installs use the
    existing librosa/template defaults; optional Beat-Transformer/CNN developer configurations
    are not bundled by this SheetSage installer. Saved neural evidence remains readable.
-6. Report issues at [GitHub Issues](https://github.com/ComfyMaxAI/ComfyMax-Audio-Chunker/issues).
+6. Report issues at [GitHub Issues](https://github.com/ComfyMaxAI/ComfyMax-MusicLab/issues).
    Include Windows/GPU/driver details, the installer error or SheetSage runtime logs and steps
    to reproduce. Review logs for private local paths before sharing; do not upload private audio.
 

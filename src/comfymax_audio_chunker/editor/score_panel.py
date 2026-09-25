@@ -23,6 +23,8 @@ class ScorePanel(QWidget):
         self.size_label = QLabel('Fit Width'); bar.addWidget(self.size_label); bar.addStretch()
         self.export_button = QPushButton('Export SVG…'); self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self.export_svg); bar.addWidget(self.export_button)
+        self.pdf_button = QPushButton('Export PDF'); self.pdf_button.setEnabled(False)
+        self.pdf_button.clicked.connect(self.export_pdf); bar.addWidget(self.pdf_button)
         self.layout.addLayout(bar)
         self.status = QLabel('No SheetSage score available.'); self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.PlainText); self.layout.addWidget(self.status)
@@ -36,6 +38,7 @@ class ScorePanel(QWidget):
         self.document = None
         self.result = None
         self.export_button.setEnabled(False)
+        self.pdf_button.setEnabled(False)
         self.abc.clear()
         self.status.setText('Open Score to view the preserved SheetSage ABC.' if doc else 'No SheetSage score available.')
         if self.renderer:
@@ -50,17 +53,14 @@ class ScorePanel(QWidget):
         document = self.load_source()
         self.result = None
         self.export_button.setEnabled(False)
+        self.pdf_button.setEnabled(False)
         if not document or document.error:
             if self.renderer: self.renderer.clear()
             self.status.setText(document.error if document else 'No SheetSage score available.')
             return
         try:
             if self.renderer is not None and self.renderer.broken:
-                self.layout.removeWidget(self.renderer.view)
-                self.renderer.view.hide()
-                self.renderer.view.deleteLater()
-                self.renderer.deleteLater()
-                self.renderer = None
+                self.close_renderer()
             if self.renderer is None:
                 from .score_renderer import ScoreRenderer
                 self.renderer = ScoreRenderer(self)
@@ -69,6 +69,8 @@ class ScorePanel(QWidget):
                 self.layout.addWidget(self.renderer.view, 1)
                 self.renderer.ready.connect(self.rendered)
                 self.renderer.failed.connect(self.failed)
+                self.renderer.pdf_finished.connect(self.pdf_saved)
+                self.renderer.pdf_failed.connect(self.pdf_error)
             self.status.setText('Rendering stored SheetSage ABC locally…')
             self.renderer.render(document)
         except (ImportError, RuntimeError, OSError) as exc:
@@ -77,15 +79,30 @@ class ScorePanel(QWidget):
     def rendered(self, result):
         self.result = result
         self.export_button.setEnabled(True)
+        self.pdf_button.setEnabled(self.renderer is not None and self.renderer.pdf_job is None)
         warnings = [re.sub('<[^>]+>', '', w) for w in result.get('warnings', [])]
         self.status.setText(f"SheetSage ABC • {len(result['svgs'])} systems • "
                             f"{'cached' if result['cached'] else 'rendered'} {result['elapsed_ms']:.0f} ms"
                             + (' • Renderer warnings: '+ ' | '.join(warnings[:3]) if warnings else ''))
         self.status.setToolTip('\n'.join(warnings) or self.document.location)
 
+    def close_renderer(self):
+        self.pdf_button.setEnabled(False)
+        if self.renderer is not None:
+            if self.renderer.view is not None:
+                self.layout.removeWidget(self.renderer.view)
+            self.renderer.close()
+            self.renderer.deleteLater()
+            self.renderer = None
+
+    def closeEvent(self, event):
+        self.close_renderer()
+        super().closeEvent(event)
+
     def failed(self, message):
         self.result = None
         self.export_button.setEnabled(False)
+        self.pdf_button.setEnabled(False)
         self.status.setText(message+' Original source remains in ABC.')
 
     def zoom(self, factor=1., reset=False):
@@ -116,3 +133,32 @@ class ScorePanel(QWidget):
             self.status.setText('Exported vector score: '+str(target))
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, 'Score export failed', str(exc))
+
+    def export_pdf(self):
+        if not self.result or not self.document or not self.renderer or self.renderer.pdf_job is not None:
+            return
+        name, _ = QFileDialog.getSaveFileName(self, 'Export score as PDF',
+                                             str(self.source.root.parent / 'score.pdf'), 'PDF score (*.pdf)')
+        if not name:
+            return
+        target = Path(name).resolve()
+        if not target.suffix:
+            target = target.with_suffix('.pdf')
+            if target.exists() and QMessageBox.question(self, 'Replace PDF?',
+                    f'Replace the existing PDF?\n{target}', QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No) != QMessageBox.Yes:
+                return
+        if target.suffix.lower() != '.pdf' or target.is_relative_to(self.source.root):
+            self.pdf_error('Choose a .pdf file outside the project folder to protect project artifacts.'); return
+        self.pdf_button.setEnabled(False)
+        self.status.setText('Exporting score as PDF…')
+        self.renderer.export_pdf(target)
+
+    def pdf_saved(self, path):
+        self.pdf_button.setEnabled(bool(self.result and self.renderer and not self.renderer.closed))
+        self.status.setText('Exported PDF score: '+path)
+
+    def pdf_error(self, message):
+        self.pdf_button.setEnabled(bool(self.result and self.renderer and not self.renderer.closed))
+        self.status.setText('PDF export failed: '+message)
+        QMessageBox.warning(self, 'PDF export failed', message)

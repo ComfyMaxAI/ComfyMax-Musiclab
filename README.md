@@ -195,8 +195,10 @@ components affect only Score; Timeline and read-only ABC remain available.
 
 Use **Zoom − / 100% / Zoom + / Fit Width** and vertical scrolling. Zoom changes
 vector display size, not music data. **Export SVG…** saves the complete rendered
-vector score outside the project folder. Direct PDF export/printing and score/audio
-synchronization are not included in this phase. Section comments remain inspectable
+vector score outside the project folder. **Export PDF** saves the complete score as
+vector PDF on A4 portrait pages with 15 mm margins and a white background, independent
+of viewer zoom/scroll. Direct printer support and score/audio synchronization are not
+included. Section comments remain inspectable
 in ABC; they are not assigned invented score positions.
 
 Renderer license and pinned package provenance are in

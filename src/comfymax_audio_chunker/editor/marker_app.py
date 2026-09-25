@@ -503,6 +503,7 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
     def closeEvent(self,event):
         if self.busy: QMessageBox.information(self,'Working','Please wait for audio preparation or saving to finish.'); event.ignore(); return
         if not self.prepare_leave(): event.ignore(); return
+        self.score_panel.close_renderer()
         if self.transport: self.transport.close()
         if self.doc: self.doc.close()
         event.accept()

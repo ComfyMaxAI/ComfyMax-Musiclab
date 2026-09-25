@@ -7,6 +7,9 @@ function Run-Checked {
     & $Exe @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Command failed ($LASTEXITCODE): $Exe" }
 }
+# Optional project-local FFmpeg
+$LocalFFmpegBin = Join-Path $PSScriptRoot 'ffmpeg\bin'
+
 if (
     (Test-Path (Join-Path $LocalFFmpegBin "ffmpeg.exe")) -and
     (Test-Path (Join-Path $LocalFFmpegBin "ffprobe.exe"))

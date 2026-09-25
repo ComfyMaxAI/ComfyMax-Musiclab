@@ -133,7 +133,7 @@ class RendererTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.renderer.clear();cls.host.close();cls.host.deleteLater();cls.app.processEvents()
+        cls.renderer.close();cls.host.close();cls.host.deleteLater();cls.app.processEvents()
 
     def render(self,text):
         type(self).result=None;type(self).failure=None
@@ -201,6 +201,33 @@ class RendererTests(unittest.TestCase):
     def test_unavailable_assets_failure_is_local(self):
         with tempfile.TemporaryDirectory() as t,patch('comfymax_audio_chunker.editor.score_renderer.ASSETS',Path(t)):
             with self.assertRaisesRegex(RuntimeError,'unavailable'):ScoreRenderer(self.host)
+
+    def test_cleanup_order_idempotence_pending_work_and_parent_destruction(self):
+        from PySide6.QtCore import qInstallMessageHandler
+        from shiboken6 import delete, isValid
+        messages=[]; previous=qInstallMessageHandler(lambda kind,context,text:messages.append(text))
+        try:
+            for destroy_parent in (False, True):
+                host=QWidget();renderer=ScoreRenderer(host);order=[];delivered=[]
+                page,profile,view=renderer.page,renderer.profile,renderer.view
+                for name,obj in [('page',page),('profile',profile),('view',view)]:
+                    obj.destroyed.connect(lambda *args,n=name:order.append(n))
+                renderer.ready.connect(delivered.append);renderer.failed.connect(delivered.append)
+                renderer.render(ScoreDocument(SIMPLE.encode(),'pending'))
+                if destroy_parent:
+                    delete(host)
+                else:
+                    renderer.close();renderer.close()
+                    renderer.clear();renderer.render(ScoreDocument(SIMPLE.encode(),'closed'))
+                    self.assertFalse(renderer.timeout.isActive())
+                    self.assertIsNone(renderer.pending)
+                    delete(host)
+                self.assertEqual(order,['page','profile','view'])
+                self.assertFalse(any(isValid(o) for o in (page,profile,view)))
+                self.app.processEvents();self.assertEqual(delivered,[])
+            self.assertFalse(any('WebEnginePage still not deleted' in m for m in messages),messages)
+        finally:
+            qInstallMessageHandler(previous)
 
     def test_stale_callback_and_process_failure_do_not_publish_a_score(self):
         type(self).result=None;type(self).failure=None

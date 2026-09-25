@@ -80,9 +80,9 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
     def __init__(self):
         super().__init__(); apply_theme(self); self.doc=None; self.transport=None; self.peaks={}; self.selected_marker=None
         self.dirty=False; self.busy=False; self.jobs=[]; self.history=QUndoStack(self)
-        self.setWindowTitle('ComfyMax Audio Chunker — Markers'); self.resize(1220,880); self.setMinimumSize(900,700)
+        self.setWindowTitle('ComfyMax MusicLab — Markers'); self.resize(1220,880); self.setMinimumSize(900,700)
         shell=QWidget(); self.setCentralWidget(shell); layout=QVBoxLayout(shell)
-        header=QHBoxLayout(); self.title=QLabel('ComfyMax Audio Chunker'); self.title.setObjectName('projectTitle'); header.addWidget(self.title,1)
+        header=QHBoxLayout(); self.title=QLabel('ComfyMax MusicLab'); self.title.setObjectName('projectTitle'); header.addWidget(self.title,1)
         self.load_button=self.button(header,'Load Song',self.choose_song)
         self.open_button=self.button(header,'Open Project',self.choose_open)
         self.import_button=self.button(header,'Import Stage 1',self.choose_import)
@@ -119,7 +119,15 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
         for wave in (self.overview,self.detail):
             wave.seek.connect(self.seek); wave.viewChanged.connect(self.set_view)
             wave.cutSelected.connect(self.select_marker); wave.cutMoved.connect(self.drag_marker)
-        self.tabs=QTabWidget(); splitter.addWidget(self.tabs); body.addWidget(splitter,1); splitter.setSizes([300,320])
+        self.tabs=QTabWidget(); splitter.addWidget(self.tabs); splitter.setSizes([300,320])
+        from .score_panel import ScorePanel
+        self.score_panel = ScorePanel(self)
+        self.views = QTabWidget()
+        self.views.addTab(splitter, 'Timeline')
+        self.views.addTab(self.score_panel, 'Score')
+        self.views.addTab(self.score_panel.abc, 'ABC')
+        self.views.currentChanged.connect(self.change_notation_view)
+        body.addWidget(self.views, 1)
         markers=QWidget(); ml=QVBoxLayout(markers); ml.setContentsMargins(4,4,4,4)
         edit=QHBoxLayout(); self.add_button=self.button(edit,'Place Marker at Playhead',self.add_at_playhead)
         edit.addWidget(QLabel('Selected marker (seconds):')); self.marker_time=QDoubleSpinBox(); self.marker_time.setDecimals(6); self.marker_time.setRange(0,999999); self.marker_time.setSingleStep(.1); edit.addWidget(self.marker_time)
@@ -169,6 +177,12 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
     def button(layout,text,slot):
         b=QPushButton(text); b.clicked.connect(slot); layout.addWidget(b); return b
 
+    def change_notation_view(self, index):
+        if index == 1:
+            self.score_panel.show_score()
+        elif index == 2:
+            self.score_panel.load_source()
+
     @staticmethod
     def table(labels):
         table=QTableWidget(0,len(labels)); table.setHorizontalHeaderLabels(labels); table.verticalHeader().hide(); table.verticalHeader().setDefaultSectionSize(38)
@@ -186,6 +200,9 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
         self.busy=value; self.progress.setVisible(value); self.content.setEnabled(not value and self.doc is not None)
         for b in (self.load_button,self.open_button,self.import_button): b.setEnabled(not value)
         for b in (self.save_button,self.save_as_button): b.setEnabled(not value and self.doc is not None)
+        if hasattr(self, 'export_midi_button'):
+            from ..music.sheetsage_midi import available
+            self.export_midi_button.setEnabled(not value and self.doc is not None and available(self.doc.data.get('music_analysis', {}).get('sheet_sage')))
         if message: self.status.setText(message)
 
     def run_task(self,operation,ready,message):
@@ -241,7 +258,7 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
         for wave in (self.detail,self.overview):
             wave.doc=self.doc; wave.peaks=self.peaks[self.transport.source]; wave.context=None; wave.position=self.transport.parked/self.transport.rate
             wave.set_view(self.doc.data['view'].get('start',0),self.doc.data['view'].get('span',30))
-        self.title.setText(self.doc.data['title']); self.setWindowTitle('ComfyMax Audio Chunker — '+self.doc.data['title'])
+        self.title.setText(self.doc.data['title']); self.setWindowTitle('ComfyMax MusicLab — '+self.doc.data['title'])
         self.refresh_transcript()
         self.sync_navigation(); self.tabs.setCurrentIndex(0); self.refresh(); self.refresh_music(); self.set_busy(False)
         self.autosave.stop(); self.dirty=False
@@ -467,6 +484,8 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
     def saved_as(self,doc):
         self.doc.close(); self.doc=doc
         for wave in (self.detail,self.overview): wave.doc=doc
+        self.score_panel.set_project(doc)
+        self.change_notation_view(self.views.currentIndex())
         self.dirty=False; self.history.setClean(); self.set_busy(False,'Saved • '+str(doc.root))
     def prepare_leave(self):
         if not self.doc: return True

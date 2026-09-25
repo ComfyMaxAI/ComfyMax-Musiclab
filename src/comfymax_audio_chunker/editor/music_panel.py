@@ -7,7 +7,7 @@ from .project import atomic_json
 from ..music.model import label, replacement, validate
 from ..music.pipeline import analyze, Cancelled
 from ..music.temporal import apply_structure
-from ..music import sheetsage
+from ..music import sheetsage, sheetsage_midi
 
 
 class MusicTask(QThread):
@@ -69,6 +69,9 @@ class MusicPanel:
         layout.addWidget(self.sheet_status)
         self.view_sheet_abc = QPushButton('View SheetSage ABC'); self.view_sheet_abc.setEnabled(False)
         self.view_sheet_abc.clicked.connect(self.show_sheet_abc); buttons.addWidget(self.view_sheet_abc)
+        self.export_midi_button = QPushButton('Export MIDI...'); self.export_midi_button.setEnabled(False)
+        self.export_midi_button.setToolTip('Export stored SheetSage notes without rerunning analysis. Requires mido (setup.ps1).')
+        self.export_midi_button.clicked.connect(self.export_sheet_midi); buttons.addWidget(self.export_midi_button)
         self.cancel_music_button = QPushButton('Cancel analysis'); self.cancel_music_button.setEnabled(False)
         buttons.addWidget(self.cancel_music_button)
         self.export_music_button = QPushButton('Export music_analysis.json'); buttons.addWidget(self.export_music_button)
@@ -122,6 +125,7 @@ class MusicPanel:
         self.music_project_id = self.doc.data['project_id']
         # Keep playback and scrolling responsive; block project mutation/switching only.
         self.busy = True
+        self.export_midi_button.setEnabled(False)
         self.music_structure_button.setEnabled(False); self.music_selected_downbeat_button.setEnabled(False)
         if self.tabs.indexOf(self.music_pane) < 0: self.tabs.addTab(self.music_pane,'Music analysis')
         for button in (self.load_button,self.open_button,self.import_button,self.save_button,self.save_as_button):
@@ -176,6 +180,7 @@ class MusicPanel:
 
     def music_finished(self, job):
         self.music_job = None; self.busy = False
+        self.export_midi_button.setEnabled(sheetsage_midi.available(self.doc.data.get('music_analysis', {}).get('sheet_sage')))
         self.include_sheetsage.setEnabled(True)
         for button in (self.load_button,self.open_button,self.import_button,self.save_button,self.save_as_button):
             button.setEnabled(True)
@@ -189,21 +194,46 @@ class MusicPanel:
         # Also restore a pre-existing pending autosave on cancellation/failure.
         if self.dirty: self.autosave.start()
 
-    def show_sheet_abc(self):
-        from .project import inside
-        evidence = self.doc.data.get('music_analysis', {}).get('sheet_sage', {})
-        artifact = next((a for a in evidence.get('raw_artifacts', []) if a['path'].endswith('/score.abc')), None)
-        if not artifact:
+    def export_sheet_midi(self):
+        if self.busy or not self.doc:
+            return
+        evidence = self.doc.data.get('music_analysis', {}).get('sheet_sage')
+        if not sheetsage_midi.available(evidence):
+            return
+        path, _ = QFileDialog.getSaveFileName(self, 'Export SheetSage MIDI',
+            str(self.doc.root / sheetsage_midi.filename(self.doc.data.get('title', 'song'))),
+            'Standard MIDI (*.mid *.midi)', options=QFileDialog.DontConfirmOverwrite)
+        if not path:
             return
         try:
-            path = inside(self.doc.root, artifact['path'])
-            text = path.read_text(encoding='utf-8-sig')
-        except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, 'SheetSage ABC', str(exc)); return
-        dialog = QDialog(self); dialog.setWindowTitle('Original SheetSage ABC — read only'); dialog.resize(900,650)
-        layout = QVBoxLayout(dialog); location = QLabel(str(path)); location.setWordWrap(True); layout.addWidget(location)
-        editor = QPlainTextEdit(); editor.setReadOnly(True); editor.setPlainText(text); layout.addWidget(editor)
-        dialog.exec()
+            from pathlib import Path
+            target = sheetsage_midi.destination(path, self.doc.root)
+            protected = [self.doc.root / a['path'] for a in self.doc.data['assets'].values()]
+            if self.doc.data.get('source', {}).get('path'):
+                protected.append(Path(self.doc.data['source']['path']))
+            if target in [p.resolve() for p in protected]:
+                raise ValueError('MIDI destination cannot replace source audio or project assets')
+            overwrite = target.exists()
+            if overwrite and QMessageBox.question(self, 'Replace MIDI?',
+                    f'Replace the existing MIDI file?\n{target}', QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No) != QMessageBox.Yes:
+                return
+            result = sheetsage_midi.export(evidence, self.doc.root, target, overwrite=overwrite)
+            self.doc.data['midi_export'] = result
+            self.changed()
+            self.status.setText('MIDI exported successfully')
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle('SheetSage MIDI export')
+            dialog.setText(sheetsage_midi.summary(result, target))
+            import json
+            dialog.setDetailedText(json.dumps(result, indent=2, ensure_ascii=False))
+            dialog.exec()
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            QMessageBox.warning(self, 'MIDI export failed', str(exc))
+
+    def show_sheet_abc(self):
+        self.views.setCurrentIndex(2)
+        self.score_panel.load_source()
 
     def set_chord_source(self, source):
         for wave in (self.overview, self.detail):
@@ -212,9 +242,12 @@ class MusicPanel:
 
     def refresh_music(self):
         from PySide6.QtWidgets import QTableWidgetItem
+        self.score_panel.set_project(self.doc)
+        self.change_notation_view(self.views.currentIndex())
         data = self.doc.data.get('music_analysis') if self.doc else None
         available, message = sheetsage.availability()
         evidence = (data or {}).get('sheet_sage')
+        self.export_midi_button.setEnabled(not self.busy and sheetsage_midi.available(evidence))
         status = evidence['status'] if evidence else 'not analyzed'
         warnings = '; '.join(evidence.get('warnings', [])) if evidence else ''
         self.sheet_status.setText(f'SheetSage2: {message} | Evidence: {status}' + (' | '+warnings if warnings else ''))

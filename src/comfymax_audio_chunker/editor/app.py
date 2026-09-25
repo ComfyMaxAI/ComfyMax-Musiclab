@@ -66,7 +66,7 @@ class Editor(QMainWindow, CorrectionPanel, ScenePanel, PhrasePanel):
         self.dirty = False
         self.loading = False
         self.jobs = []
-        self.setWindowTitle('ComfyMax Audio Chunker — Lyrics + Audio Alignment')
+        self.setWindowTitle('ComfyMax MusicLab — Lyrics + Audio Alignment')
         self.resize(1180,850)
         self.setMinimumSize(880,660)
         shell=QWidget(); self.setCentralWidget(shell)
@@ -251,7 +251,7 @@ class Editor(QMainWindow, CorrectionPanel, ScenePanel, PhrasePanel):
             wave.context=None; wave.position=self.transport.parked/self.transport.rate
             wave.set_view(view.get('start',0),view.get('span',30))
         self.title.setText(self.doc.data['title'])
-        self.setWindowTitle(f"ComfyMax Audio Chunker — {self.doc.data['title']}")
+        self.setWindowTitle(f"ComfyMax MusicLab — {self.doc.data['title']}")
         self.original.clear()
         self.loading=False; self.content.setEnabled(True); self.save_button.setEnabled(True)
         self.save_as_button.setEnabled(True)
@@ -469,7 +469,7 @@ def legacy_main():
     parser.add_argument('--destination',type=Path)
     args=parser.parse_args()
     if bool(args.import_analysis)!=bool(args.destination): parser.error('--import-analysis requires --destination')
-    app=QApplication(sys.argv[:1]); app.setApplicationName('ComfyMax Audio Chunker'); app.setStyle('Fusion')
+    app=QApplication(sys.argv[:1]); app.setApplicationName('ComfyMax MusicLab'); app.setStyle('Fusion')
     palette=QPalette()
     for role,color in [(QPalette.Window,'#f3f5f7'),(QPalette.WindowText,'#263342'),
                        (QPalette.Base,'#ffffff'),(QPalette.AlternateBase,'#f0f3f7'),

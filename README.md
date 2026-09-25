@@ -1,5 +1,7 @@
 # ComfyMax MusicLab
 
+![MusicLab](docs/images/MusicLab.png)
+
 **ComfyMax MusicLab** is a local music-analysis and scene-preparation workspace built around a waveform editor. It combines manual markers and scene creation with optional music analysis, chord/downbeat visualization, editable Whisper lyrics, and SheetSage2 symbolic transcription. Processing stays local; the application is designed to work without cloud credits.
 
 The marker workflow remains **Load Song → local Demucs separation → edit markers → Create Scenes → Export Scenes**. Markers define scene boundaries. Each interval has an editable Vocal/Instrumental Type, initially suggested from the available vocal stem; manual choices persist and are copied into scenes when Create Scenes is selected.
@@ -142,3 +144,62 @@ Model/package licenses should be reviewed before redistribution. Review the comp
 
 No model, downloaded runtime, user audio, project or cache should be committed. This is a
 source-plus-installer tester distribution, not a prebuilt application or a commercial model license.
+
+
+## SheetSage2 MIDI export
+
+In **Music Analysis**, use **Export MIDI...** after a successful saved SheetSage2
+transcription. Choose the destination; replacing an existing MIDI requires confirmation.
+The exporter uses preserved native note events (or existing normalized notes), never
+parses `score.abc` and never reruns analysis. Original evidence and other analyses stay
+unchanged. Standard MIDI File Type 1, 960 PPQ exports can be opened and edited in DAWs
+such as Studio One, REAPER, Cubase, Ableton Live and FL Studio. Compatibility is based
+on the standard format; see the Phase 2E report for applications actually tested.
+
+Run `setup.ps1` to install the pinned small `mido==1.3.3` editor dependency. Without it
+the application still opens, but MIDI export is disabled. Projects without suitable
+SheetSage evidence or a reliable stored global tempo also have export disabled.
+
+Timing uses the preserved SheetSage global tempo and absolute note seconds, with no
+Beat-Transformer/CNN alignment or quantization to the MusicLab grid. No tempo changes
+are inferred. Timed native meter/key tokens are decoded only for the verified audio.cpp
+0.8.1/model identity; other versions use reliable initial stored declarations. Additional
+ABC-only changes stay in the source evidence because their times are unproven.
+Verified tracks are named Vocal Melody / Instrumental Melody; unknown versions use
+SheetSage Track N. Velocity is fixed at 80; no instruments or dynamics are invented.
+Separate melodic channels avoid channel 10. Same-pitch overlaps use extra channels;
+exceeding the 15-channel limit fails explicitly instead of losing notes.
+
+Every export is read back and checked before publication. The project stores the latest
+export provenance, source hash, diagnostics and timing errors, without requiring the
+external MIDI file to remain present. Invalid notes are explicitly reported; positive
+notes shorter than one tick can be extended to one tick with a diagnostic. Duration is
+the final note end, which may differ from the full audio duration. Model transcription
+can contain errors and may need manual correction in a DAW.
+# Score Viewer (Phase 2F)
+
+The editor offers **Timeline | Score | ABC** views with the existing audio controls
+above them. Open a saved SheetSage analysis and choose **Score**; **ABC** shows its
+original, read-only `score.abc`. Viewing never reruns SheetSage and does not require
+its inference runtime or model. Projects without a score show a friendly empty state.
+
+The score currently represents the **SheetSage2 ABC transcription**, including its
+voices/melodies, chord symbols, tempo, rests and encoded key/meter changes. This is
+model-generated transcription: do not assume every note or chord is correct.
+It does not use MIDI or substitute MusicLab's other chord/rhythm estimates.
+
+Rendering is fully local/offline using bundled **abc2svg 1.22.1 (LGPL-3.0-or-later)** and the Qt
+WebEngine component included in the existing PySide6 editor dependency. No CDN,
+cloud service, Node installation or inference download is needed. Missing renderer
+components affect only Score; Timeline and read-only ABC remain available.
+
+Use **Zoom − / 100% / Zoom + / Fit Width** and vertical scrolling. Zoom changes
+vector display size, not music data. **Export SVG…** saves the complete rendered
+vector score outside the project folder. Direct PDF export/printing and score/audio
+synchronization are not included in this phase. Section comments remain inspectable
+in ABC; they are not assigned invented score positions.
+
+Renderer license and pinned package provenance are in
+`src/comfymax_audio_chunker/editor/score_assets/`. The in-memory render cache is
+bounded and keyed by ABC content, renderer version and layout options; no derived
+score cache is written into the project.

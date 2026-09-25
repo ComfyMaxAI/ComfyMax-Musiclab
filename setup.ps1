@@ -7,6 +7,12 @@ function Run-Checked {
     & $Exe @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Command failed ($LASTEXITCODE): $Exe" }
 }
+if (
+    (Test-Path (Join-Path $LocalFFmpegBin "ffmpeg.exe")) -and
+    (Test-Path (Join-Path $LocalFFmpegBin "ffprobe.exe"))
+) {
+    $env:PATH = "$LocalFFmpegBin;$env:PATH"
+}
 if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue) -or -not (Get-Command ffprobe -ErrorAction SilentlyContinue)) {
     throw 'Install FFmpeg with ffprobe on PATH, then reopen PowerShell.'
 }

@@ -97,6 +97,16 @@ Launch Editor.cmd
 
 The start script uses only the project-local virtual environment and project files.
 
+## Updating
+
+For installations obtained with Git, run:
+
+```bat
+Update.bat
+```
+
+The updater checks the current branch for a safe fast-forward update, stops when tracked local changes could be overwritten, and then runs `Install.bat` to check dependencies and managed runtimes. It does not remove models, projects, outputs, settings, or other user data.
+
 ## Models
 
 Model weights are intentionally excluded from both the Git repository and the audio.cpp runtime ZIP because they are large and users may choose different model variants. MusicLab uses local models for:

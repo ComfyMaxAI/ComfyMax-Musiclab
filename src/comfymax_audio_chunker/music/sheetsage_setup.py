@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
-import uuid
 import zipfile
 from . import sheetsage_runtime as runtime
 from .sheetsage_worker import sha256
@@ -57,6 +56,27 @@ def validate_runtime(install):
     if 'audio.cpp '+runtime.VERSION not in result.stdout: raise ValueError('Unexpected audio.cpp version')
 
 
+def activate_runtime(stage,install):
+    """Copy a verified runtime into place without Windows directory rename semantics."""
+    stage=Path(stage).resolve(); install=Path(install).resolve()
+    validate_runtime(stage)
+    install.parent.mkdir(parents=True,exist_ok=True)
+    if install.exists():
+        # installation.json is the validity marker for this managed runtime.
+        (install/'installation.json').unlink(missing_ok=True)
+        shutil.rmtree(install)
+    try:
+        def ignore_manifest(directory,names):
+            return {'installation.json'} if Path(directory).resolve()==stage and 'installation.json' in names else set()
+        shutil.copytree(stage,install,ignore=ignore_manifest)
+        shutil.copy2(stage/'installation.json',install/'installation.json')
+        validate_runtime(install)
+    except BaseException:
+        # A partial destination without its verified manifest cannot pass discovery.
+        (install/'installation.json').unlink(missing_ok=True)
+        raise
+
+
 def setup(root=runtime.APP_ROOT,cache=None,install_model=True):
     root=Path(root).resolve(); cache=Path(cache).resolve() if cache else root/'.cache'/'sheetsage-downloads'
     cache.mkdir(parents=True,exist_ok=True)
@@ -78,17 +98,7 @@ def setup(root=runtime.APP_ROOT,cache=None,install_model=True):
                 if sha256(stage/'audiocpp_cli.exe')!=runtime.EXE_SHA: raise ValueError('Executable checksum mismatch')
                 files={p.relative_to(stage).as_posix():dict(bytes=p.stat().st_size,sha256=sha256(p)) for p in sorted(stage.rglob('*')) if p.is_file()}
                 (stage/'installation.json').write_text(json.dumps(dict(version=runtime.VERSION,archives=runtime.ARCHIVES,files=files),indent=2),encoding='utf8')
-                validate_runtime(stage)
-                install.parent.mkdir(parents=True,exist_ok=True)
-                backup=None
-                if install.exists():
-                    backup=lock.parent/('sheetsage-runtime-backup-'+uuid.uuid4().hex)
-                    install.rename(backup)
-                    print('Previous incomplete runtime retained at '+str(backup),flush=True)
-                try: stage.rename(install)
-                except BaseException:
-                    if backup is not None: backup.rename(install)
-                    raise
+                activate_runtime(stage,install)
                 print('Runtime installed and verified.',flush=True)
         if install_model:
             if model.is_file() and sha256(model)==runtime.MODEL_SHA:

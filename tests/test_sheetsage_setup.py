@@ -70,6 +70,29 @@ class InstallationTests(unittest.TestCase):
         with self.assertRaises(ValueError):runtime.runtime_files(install,full=True)
         (install/'installation.json').write_text('[]')
         with self.assertRaises(ValueError):runtime.runtime_files(install)
+    def test_windows_activation_avoids_directory_rename(self):
+        install,model=runtime.locations(self.root)
+        with patch.object(Path,'rename',side_effect=PermissionError(5,'Access is denied')):
+            self.install_runtime()
+        setup.validate_runtime(install);self.assertFalse(model.exists())
+
+    def test_incomplete_destination_is_repaired_without_touching_user_data(self):
+        install,model=runtime.locations(self.root);install.mkdir(parents=True)
+        (install/'stale.dll').write_bytes(b'incomplete')
+        model.parent.mkdir(parents=True);model.write_bytes(b'user model')
+        project=self.root/'projects'/'song'/'data.json';project.parent.mkdir(parents=True);project.write_text('user data')
+        self.install_runtime();setup.validate_runtime(install)
+        self.assertFalse((install/'stale.dll').exists())
+        self.assertEqual(model.read_bytes(),b'user model');self.assertEqual(project.read_text(),'user data')
+
+    def test_failed_placement_has_no_valid_manifest_and_cleans_staging(self):
+        install,_=runtime.locations(self.root)
+        with patch.object(setup.shutil,'copy2',side_effect=PermissionError(5,'Access is denied')),self.assertRaises(PermissionError):
+            self.install_runtime()
+        self.assertFalse((install/'installation.json').exists())
+        with self.assertRaises((OSError,ValueError)):runtime.runtime_files(install)
+        self.assertEqual(list((self.root/'.cache').glob('sheetsage-stage-*')),[])
+
     def test_safe_archive_paths_and_failed_setup_unlock(self):
         archive=self.cache/'unsafe.zip'
         with zipfile.ZipFile(archive,'w') as z:z.writestr('../escape',b'bad')

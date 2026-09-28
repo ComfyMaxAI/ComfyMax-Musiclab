@@ -1,9 +1,10 @@
-"""Read-only notation views; deliberately disconnected from the transport."""
+"""Original and editable Working ABC views, disconnected from the transport."""
 import re
 from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit, QFileDialog, QMessageBox
-from .score_source import SheetSageABCSource
+from .score_source import ScoreDocument, SheetSageABCSource
+from .abc_transpose import ABCTransposeError, MAX_SEMITONES, transpose_abc
 
 
 class ScorePanel(QWidget):
@@ -11,7 +12,9 @@ class ScorePanel(QWidget):
         super().__init__(parent)
         self.renderer = None
         self.source = None
+        self.original_document = None
         self.document = None
+        self.transpose_amount = 0
         self.result = None
         self.scale = 1.
         self.fit = True
@@ -29,13 +32,28 @@ class ScorePanel(QWidget):
         self.status = QLabel('No SheetSage score available.'); self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.PlainText); self.layout.addWidget(self.status)
         self.layout.addStretch()
-        self.abc = QPlainTextEdit(); self.abc.setReadOnly(True)
+        self.abc_view = QWidget()
+        abc_layout = QVBoxLayout(self.abc_view); abc_layout.setContentsMargins(0, 0, 0, 0)
+        transpose_bar = QHBoxLayout()
+        for amount in (-2, -1):
+            button = QPushButton(str(amount)); button.clicked.connect(lambda checked=False, n=amount: self.transpose(n)); transpose_bar.addWidget(button)
+        reset = QPushButton('Reset'); reset.clicked.connect(self.reset_abc); transpose_bar.addWidget(reset)
+        for amount in (1, 2):
+            button = QPushButton(f'+{amount}'); button.clicked.connect(lambda checked=False, n=amount: self.transpose(n)); transpose_bar.addWidget(button)
+        self.transpose_label = QLabel('Transpose: Original'); transpose_bar.addWidget(self.transpose_label)
+        preview = QPushButton('Update Preview'); preview.clicked.connect(self.preview_working); transpose_bar.addWidget(preview)
+        transpose_bar.addStretch(); abc_layout.addLayout(transpose_bar)
+        self.abc = QPlainTextEdit()
         self.abc.setPlaceholderText('No SheetSage score available.')
+        abc_layout.addWidget(self.abc, 1)
 
     def set_project(self, doc):
         self.source = (SheetSageABCSource(doc.root, doc.data.get('music_analysis', {}).get('sheet_sage'))
                        if doc else None)
+        self.original_document = None
         self.document = None
+        self.transpose_amount = 0
+        self.transpose_label.setText('Transpose: Original')
         self.result = None
         self.export_button.setEnabled(False)
         self.pdf_button.setEnabled(False)
@@ -45,12 +63,72 @@ class ScorePanel(QWidget):
             self.renderer.clear()
 
     def load_source(self):
-        self.document = self.source.read() if self.source else None
-        self.abc.setPlainText(self.document.text if self.document else '')
+        if self.original_document is None:
+            self.original_document = self.source.read() if self.source else None
+            self.document = self.original_document
+            self.abc.blockSignals(True)
+            self.abc.setPlainText(self.document.text if self.document else '')
+            self.abc.blockSignals(False)
         return self.document
 
+    def working_document(self):
+        if self.original_document is None:
+            self.load_source()
+        if not self.original_document:
+            return None
+        if self.original_document.error:
+            return self.original_document
+        text = self.abc.toPlainText()
+        payload = text.encode('utf-8')
+        if self.document and text == self.document.text:
+            payload = self.document.payload
+        return ScoreDocument(payload, 'Working ABC')
+
+    def transpose(self, semitones):
+        document = self.working_document()
+        if not document or document.error:
+            self.status.setText(document.error if document else 'No SheetSage score available.')
+            return
+        total = self.transpose_amount + semitones
+        if abs(total) > MAX_SEMITONES:
+            self.status.setText('Transpose range is limited to -12 through +12 semitones.')
+            return
+        try:
+            text = transpose_abc(self.abc.toPlainText(), semitones)
+        except ABCTransposeError as exc:
+            self.status.setText('ABC transposition failed: ' + str(exc))
+            return
+        self.document = ScoreDocument(text.encode('utf-8'), 'Working ABC')
+        self.abc.blockSignals(True); self.abc.setPlainText(text); self.abc.blockSignals(False)
+        self.transpose_amount = total
+        unit = 'semitone' if abs(total) == 1 else 'semitones'
+        self.transpose_label.setText(f'Transpose: {total:+d} {unit}')
+        self.preview_working()
+
+    def reset_abc(self):
+        if self.original_document is None:
+            self.load_source()
+        if not self.original_document:
+            return
+        self.document = self.original_document
+        self.abc.blockSignals(True); self.abc.setPlainText(self.original_document.text); self.abc.blockSignals(False)
+        self.transpose_amount = 0
+        self.transpose_label.setText('Transpose: Original')
+        self.preview_working()
+
+    def preview_working(self):
+        document = self.working_document()
+        if not document or document.error:
+            self.status.setText(document.error if document else 'No SheetSage score available.')
+            return
+        self.document = document
+        self.render_document(document)
+
     def show_score(self):
-        document = self.load_source()
+        document = self.working_document()
+        self.render_document(document)
+
+    def render_document(self, document):
         self.result = None
         self.export_button.setEnabled(False)
         self.pdf_button.setEnabled(False)
@@ -71,7 +149,7 @@ class ScorePanel(QWidget):
                 self.renderer.failed.connect(self.failed)
                 self.renderer.pdf_finished.connect(self.pdf_saved)
                 self.renderer.pdf_failed.connect(self.pdf_error)
-            self.status.setText('Rendering stored SheetSage ABC locally…')
+            self.status.setText('Rendering Working ABC locally…')
             self.renderer.render(document)
         except (ImportError, RuntimeError, OSError) as exc:
             self.failed('Score renderer unavailable: '+str(exc))
@@ -81,7 +159,7 @@ class ScorePanel(QWidget):
         self.export_button.setEnabled(True)
         self.pdf_button.setEnabled(self.renderer is not None and self.renderer.pdf_job is None)
         warnings = [re.sub('<[^>]+>', '', w) for w in result.get('warnings', [])]
-        self.status.setText(f"SheetSage ABC • {len(result['svgs'])} systems • "
+        self.status.setText(f"Working ABC • {len(result['svgs'])} systems • "
                             f"{'cached' if result['cached'] else 'rendered'} {result['elapsed_ms']:.0f} ms"
                             + (' • Renderer warnings: '+ ' | '.join(warnings[:3]) if warnings else ''))
         self.status.setToolTip('\n'.join(warnings) or self.document.location)
@@ -103,7 +181,7 @@ class ScorePanel(QWidget):
         self.result = None
         self.export_button.setEnabled(False)
         self.pdf_button.setEnabled(False)
-        self.status.setText(message+' Original source remains in ABC.')
+        self.status.setText(message+' Working ABC remains unchanged.')
 
     def zoom(self, factor=1., reset=False):
         self.fit = False

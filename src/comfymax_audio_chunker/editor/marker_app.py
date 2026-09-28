@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt,QThread,Signal,QTimer
 from PySide6.QtGui import QAction,QUndoStack,QUndoCommand,QColor,QFont,QPalette
 from PySide6.QtWidgets import (QApplication,QMainWindow,QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,
     QComboBox,QDoubleSpinBox,QSlider,QCheckBox,QSplitter,QTabWidget,QTableWidget,QTableWidgetItem,
-    QAbstractItemView,QHeaderView,QFileDialog,QMessageBox,QProgressBar,QLineEdit,QTextEdit,QAbstractSpinBox)
+    QAbstractItemView,QHeaderView,QFileDialog,QMessageBox,QProgressBar,QLineEdit,QTextEdit,QAbstractSpinBox,QTabBar)
 from .project import Document,playable
 from .audio import Transport,Cursor,load_audio
 from .marker_waveform import MarkerWaveform
@@ -129,7 +129,7 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, Settin
         self.views = QTabWidget()
         self.views.addTab(splitter, 'Timeline')
         self.views.addTab(self.score_panel, 'Score')
-        self.views.addTab(self.score_panel.abc, 'ABC')
+        self.views.addTab(self.score_panel.abc_view, 'ABC')
         self.build_generation(); self.views.addTab(self.generation_pane,'Music Generation')
         self.build_settings(); self.views.addTab(self.settings_pane,'Settings')
         self.views.currentChanged.connect(self.change_notation_view)
@@ -174,6 +174,7 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, Settin
         self.build_transcript()
         self.tabs.addTab(self.transcript_pane,'Transcript aid')
         self.build_music(header)
+        self.views.tabBar().setTabButton(1, QTabBar.ButtonPosition.LeftSide, self.analyze_music_button)
         self.progress=QProgressBar(); self.progress.setRange(0,0); self.progress.hide(); layout.addWidget(self.progress)
         self.status=QLabel('Load a song for local Demucs separation, or open an existing project.'); self.status.setWordWrap(True); layout.addWidget(self.status)
         self.content.setEnabled(False); self.save_button.setEnabled(False); self.save_as_button.setEnabled(False)

@@ -19,7 +19,7 @@ echo ============================================================
 echo Models are not installed automatically.
 echo.
 
-echo [1/8] Checking Python 3.11...
+echo [1/9] Checking Python 3.11...
 if exist "%VENV_PYTHON%" (
     "%VENV_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,11) else 1)" >nul 2>&1
     if errorlevel 1 (
@@ -50,7 +50,7 @@ goto :INSTALL_FAILED
 
 :PYTHON_READY
 echo.
-echo [2/8] Checking FFmpeg...
+echo [2/9] Checking FFmpeg...
 if exist "%FFMPEG_EXE%" if exist "%FFPROBE_EXE%" (
     set "PATH=%FFMPEG_BIN%;%PATH%"
     goto :VERIFY_FFMPEG
@@ -105,13 +105,13 @@ if errorlevel 1 (
 echo [OK] FFmpeg and ffprobe
 
 echo.
-echo [3/8] Validating MusicLab-managed audio.cpp runtime...
+echo [3/9] Validating MusicLab-managed audio.cpp runtime...
 set "AUDIOCPP=%ROOT%engines\audiocpp"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%install-audiocpp-runtime.ps1" -RuntimeDir "%AUDIOCPP%" -ReleaseUrl "%AUDIOCPP_RUNTIME_URL%" -ExpectedSha256 "%AUDIOCPP_RUNTIME_SHA256%"
 if errorlevel 1 goto :INSTALL_FAILED
 
 echo.
-echo [4/8] Installing Python environment and MusicLab dependencies...
+echo [4/9] Installing Python environment and MusicLab dependencies...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%setup.ps1"
 if errorlevel 1 goto :INSTALL_FAILED
 if not exist "%VENV_PYTHON%" (
@@ -121,14 +121,14 @@ if not exist "%VENV_PYTHON%" (
 echo [OK] Virtual environment
 
 echo.
-echo [5/8] Creating model directories without downloading models...
+echo [5/9] Creating model directories without downloading models...
 if not exist "%ROOT%models\yue2" mkdir "%ROOT%models\yue2"
 if not exist "%ROOT%models\sheetsage2" mkdir "%ROOT%models\sheetsage2"
 if not exist "%ROOT%.cache\whisper" mkdir "%ROOT%.cache\whisper"
 echo [OK] Model directories
 
 echo.
-echo [6/8] Installing or validating SheetSage runtime...
+echo [6/9] Installing or validating SheetSage runtime...
 set "SHEETSAGE_RUNTIME=%ROOT%engines\sheetsage\runtime"
 "%VENV_PYTHON%" -c "from pathlib import Path; from comfymax_audio_chunker.music.sheetsage_setup import validate_runtime; validate_runtime(Path(r'%SHEETSAGE_RUNTIME%'))" >nul 2>&1
 if not errorlevel 1 (
@@ -147,7 +147,12 @@ echo [OK] SheetSage runtime
 :SHEETSAGE_READY
 
 echo.
-echo [7/8] Running installation self-check...
+echo [7/9] Installing or validating abc2abc runtime...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%install-abcmidi-runtime.ps1"
+if errorlevel 1 goto :INSTALL_FAILED
+
+echo.
+echo [8/9] Running installation self-check...
 "%VENV_PYTHON%" -c "import comfymax_audio_chunker, PySide6, faster_whisper, mido, sounddevice, soundfile, librosa, demucs; print('[OK] MusicLab dependencies'); print('[OK] Whisper runtime')"
 if errorlevel 1 goto :INSTALL_FAILED
 "%VENV_PYTHON%" -c "from comfymax_audio_chunker.music import sheetsage_setup; print('[OK] SheetSage integration')"
@@ -157,7 +162,7 @@ if errorlevel 1 goto :INSTALL_FAILED
 echo [OK] Python
 
 echo.
-echo [8/8] Checking NVIDIA GPU...
+echo [9/9] Checking NVIDIA GPU...
 where nvidia-smi.exe >nul 2>&1
 if errorlevel 1 (
     echo [WARNING] nvidia-smi was not found. GPU-accelerated functions may not be available.

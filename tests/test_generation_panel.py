@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 import wave
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
@@ -10,10 +11,12 @@ os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from PySide6.QtGui import QTextCursor
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication,QGroupBox,QLabel,QPlainTextEdit,QSlider,QSpinBox
+from PySide6.QtWidgets import QApplication,QGroupBox,QLabel,QPlainTextEdit,QPushButton,QSlider,QSpinBox,QTabBar
 
 from comfymax_audio_chunker.editor.generation_panel import (GenerationPanel,GpuQueryTask,STYLE_PRESETS,
                                                             parse_nvidia_smi)
+from comfymax_audio_chunker.editor.score_panel import ScorePanel
+from comfymax_audio_chunker.editor.score_source import SheetSageABCSource
 
 SEMANTIC_DEFAULTS={'semantic_temperature':1.0,'semantic_top_p':.95,'semantic_top_k':100,
     'semantic_repetition_penalty':1.2,'semantic_penalty_window':50,
@@ -28,12 +31,17 @@ class Source:
     def read(self): return SimpleNamespace(payload=self.text.encode(),text=self.text)
 
 
+class ScoreSource:
+    def __init__(self,text=''): self.source=Source(text)
+    def working_document(self): return self.source.read()
+
+
 class Host(GenerationPanel):
     def __init__(self,settings_path=None,model_settings=None):
         self.generation_settings_path=settings_path
         self.model_settings={'yue2_main_path':'models/YuE2',**(model_settings or {})}
         self.lyrics_editor=QPlainTextEdit('original lyrics')
-        self.score_panel=SimpleNamespace(source=Source('X:1\nK:C\nCDEF|'))
+        self.score_panel=ScoreSource('X:1\nK:C\nCDEF|')
         self.audiocpp_runtime=Mock()
         self.build_generation()
 
@@ -99,6 +107,45 @@ class GenerationPanelTests(unittest.TestCase):
         self.host.score_panel.source=Source(''); self.host.refresh_generation_inputs()
         self.assertFalse(self.host.generation_use_abc.isChecked()); self.assertEqual(self.host.generation_abc.toPlainText(),'')
 
+    def test_working_abc_transpose_manual_edit_reset_and_generation_copy(self):
+        fixture=(Path(__file__).parent/'fixtures'/'transpose.abc').read_bytes()
+        project=Path(self.temp.name)/'project'
+        source=project/'music_analysis/sheetsage/test/native/score.abc'
+        source.parent.mkdir(parents=True); source.write_bytes(fixture)
+        evidence=dict(raw_artifacts=[dict(path=source.relative_to(project).as_posix(),
+                      sha256=hashlib.sha256(fixture).hexdigest())])
+        score=ScorePanel(); self.addCleanup(score.close)
+        score.source=SheetSageABCSource(project,evidence); score.load_source()
+        self.host.score_panel=score
+
+        self.host.refresh_generation_inputs()
+        self.assertEqual(self.host.generation_abc.toPlainText(),score.abc.toPlainText())
+
+        for amount,key,chord,note in ((2,'K:D','"D"','D E'),(-2,'K:Bb','"Bb"','B, C')):
+            with patch.object(score,'preview_working'):
+                score.reset_abc()
+                score.transpose(amount)
+            self.host.refresh_generation_inputs()
+            copied=self.host.generation_abc.toPlainText()
+            self.assertIn(key,copied); self.assertIn(chord,copied); self.assertIn(note,copied)
+            self.assertEqual(copied,score.abc.toPlainText())
+
+        score.abc.setPlainText(score.abc.toPlainText().replace('T:Transpose fixture','T:Manual Working edit'))
+        self.host.refresh_generation_inputs()
+        self.assertIn('T:Manual Working edit',self.host.generation_abc.toPlainText())
+
+        working_before=score.abc.toPlainText()
+        self.host.generation_abc.setPlainText('generation-only edit')
+        self.assertEqual(score.abc.toPlainText(),working_before)
+        self.assertEqual(self.host.generation_request()['abc'],'generation-only edit')
+
+        self.host.reset_generation_inputs()
+        with patch.object(score,'preview_working'):
+            score.reset_abc()
+        self.host.reset_generation_inputs()
+        self.assertEqual(self.host.generation_abc.toPlainText(),score.original_document.text)
+        self.assertEqual(source.read_bytes(),fixture)
+
     def test_sampling_sections_collapsed_and_request_values(self):
         h=self.host; h.refresh_generation_inputs()
         self.assertFalse(h.generation_abc_toggle.isChecked())
@@ -158,12 +205,16 @@ class GenerationPanelTests(unittest.TestCase):
         h.audiocpp_runtime.generate_yue2.return_value={'path':path,'response':{},'request':{}}
         h.generate_music()
         self.assertFalse(h.generation_generate.isEnabled()); self.assertEqual(h.generation_output_status.text(),'Generating...')
+        active_style=h.generation_output_status.styleSheet()
+        self.assertIn('background-color:#dc2626',active_style); self.assertIn('color:white',active_style)
+        self.assertIn('padding:',active_style); self.assertIn('border-radius:',active_style)
         self.assertTrue(h.generation_job is not None)
         self.assertTrue(h.generation_job.wait(3000)); self.app.processEvents()
         h.audiocpp_runtime.generate_yue2.assert_called_once_with(
             'original lyrics','warm acoustic','X:1\nK:C\nCDEF|',42,'melody',h.generation_preview_dir.path(),
             {**PRIMARY_DEFAULTS,**SEMANTIC_DEFAULTS,**ABC_DEFAULTS})
         self.assertTrue(h.generation_generate.isEnabled()); self.assertTrue(h.generation_play.isEnabled())
+        self.assertEqual(h.generation_output_status.styleSheet(),'')
         self.assertEqual(h.generation_output_path,path)
         self.assertEqual(Path(h.generation_player.source().toLocalFile()),path)
         self.assertNotIn(str(Path('D:/ComfyMax-Musiclab/outputs/music_generation')),str(path))
@@ -218,6 +269,7 @@ class GenerationPanelTests(unittest.TestCase):
         h.audiocpp_runtime.generate_yue2.side_effect=RuntimeError('local failure')
         h.generate_music(); self.assertTrue(h.generation_job.wait(3000)); self.app.processEvents()
         self.assertTrue(h.generation_generate.isEnabled()); self.assertIn('local failure',h.generation_output_status.text())
+        self.assertEqual(h.generation_output_status.styleSheet(),'')
         self.assertEqual(h.generation_output_path,previous); self.assertTrue(previous.exists())
 
     def test_new_preview_replaces_and_removes_previous(self):
@@ -281,6 +333,22 @@ class GenerationPanelTests(unittest.TestCase):
         directory=Path(window.generation_preview_dir.path()); preview=directory/'closing.wav'; preview.write_bytes(b'audio')
         window.generation_finished({'path':preview}); window.close(); self.app.processEvents()
         self.assertFalse(preview.exists()); self.assertFalse(directory.exists())
+
+    def test_single_analyze_music_button_between_timeline_and_score_keeps_callback(self):
+        from comfymax_audio_chunker.editor.marker_app import MarkerEditor
+        values=dict(sheet_sage_path='',yue2_main_path='',yue2_vae_path='',whisper_model='medium')
+        with patch('comfymax_audio_chunker.editor.settings_panel.load_settings',return_value=values), \
+             patch.object(MarkerEditor,'analyze_music',autospec=True) as analyze:
+            window=MarkerEditor()
+            self.addCleanup(window.close); self.addCleanup(window.deleteLater)
+            buttons=[button for button in window.findChildren(QPushButton) if button.text()=='Analyze Music']
+            self.assertEqual(buttons,[window.analyze_music_button])
+            tabs=window.views.tabBar()
+            self.assertEqual((tabs.tabText(0),tabs.tabText(1)),('Timeline','Score'))
+            self.assertIs(tabs.tabButton(1,QTabBar.ButtonPosition.LeftSide),window.analyze_music_button)
+            window.content.setEnabled(True); window.analyze_music_button.setEnabled(True)
+            window.analyze_music_button.click()
+            analyze.assert_called_once_with(window)
 
 
 if __name__=='__main__': unittest.main()

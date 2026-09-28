@@ -251,7 +251,7 @@ class PanelTests(unittest.TestCase):
             with patch('comfymax_audio_chunker.editor.score_renderer.ScoreRenderer',side_effect=ImportError('not installed')):
                 p.show_score()
             self.assertIn('unavailable',p.status.text());self.assertEqual(p.abc.toPlainText(),SIMPLE)
-            self.assertTrue(p.abc.isReadOnly());self.assertFalse(p.export_button.isEnabled());p.close()
+            self.assertFalse(p.abc.isReadOnly());self.assertFalse(p.export_button.isEnabled());p.close()
 
     def test_reopen_save_as_stored_score_without_runtime_no_mutation(self):
         import test_music

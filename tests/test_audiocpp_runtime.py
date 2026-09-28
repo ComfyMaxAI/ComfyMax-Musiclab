@@ -76,16 +76,17 @@ class AudioCppRuntimeTests(unittest.TestCase):
 
     def test_generation_request_loads_only_when_needed_and_saves_audio(self):
         wav=b'RIFFtest-wave'
+        generation_copy='X:1\nK:D\n"D"D E F G|'
         with tempfile.TemporaryDirectory() as folder:
             runtime=AudioCppRuntime(); runtime.ensure_ready=Mock(); runtime.load_yue2=Mock()
             with patch.object(runtime,'models',return_value=[{'id':'yue2-3b-q8','loaded':False}]), \
                  patch.object(runtime,'_json_request',return_value={'audio':base64.b64encode(wav).decode()}) as send:
-                result=runtime.generate_yue2('words','indie','X:1',7,'melody',folder)
+                result=runtime.generate_yue2('words','indie',generation_copy,7,'melody',folder)
             runtime.ensure_ready.assert_called_once(); runtime.load_yue2.assert_called_once()
             endpoint,payload=send.call_args.args
             self.assertEqual(endpoint,'/v1/tasks/run'); self.assertEqual(payload['model'],'yue2-3b-q8')
             self.assertEqual(payload['request'],{'lyrics':'words','seed':7,
-                'options':{'style':'indie','cot':'melody','abc':'X:1'}})
+                'options':{'style':'indie','cot':'melody','abc':generation_copy}})
             self.assertEqual(result['path'].read_bytes(),wav)
 
     def test_generation_does_not_reload_resident_model(self):

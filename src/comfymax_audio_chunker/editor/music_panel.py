@@ -61,7 +61,7 @@ class MusicPanel:
         self.music_job = None
         self.music_pane = QWidget(self); self.music_pane.hide(); layout = QVBoxLayout(self.music_pane)
         buttons = QHBoxLayout()
-        self.analyze_music_button = QPushButton('Analyze Music'); header.addWidget(self.analyze_music_button)
+        self.analyze_music_button = QPushButton('Analyze Music')
         available, message = sheetsage.availability()
         self.sheet_status = QLabel('SheetSage2: '+message); self.sheet_status.setWordWrap(True)
         layout.addWidget(self.sheet_status)

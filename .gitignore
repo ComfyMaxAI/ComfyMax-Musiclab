@@ -53,6 +53,10 @@ desktop.ini
 # Optional managed SheetSage downloads, never source distribution
 engines/sheetsage/runtime/
 
+# Managed abcMIDI transposition runtime; notice remains in the repository
+engines/abcmidi/abc2abc.exe
+engines/abcmidi/installation.json
+
 # Downloaded model packages (weights, configs, tokenizers, and sidecars)
 models/*
 !models/.gitkeep

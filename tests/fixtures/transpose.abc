@@ -1,0 +1,11 @@
+X:1
+T:Transpose fixture
+M:4/4
+L:1/4
+V:one name="Lead"
+V:two name="Harmony"
+K:C
+V:one
+"C"C D ^F =F|"Am"A _B B c|
+V:two
+"F#7"F, G, A, B,|C D E F|

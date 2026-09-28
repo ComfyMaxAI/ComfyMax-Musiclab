@@ -238,7 +238,7 @@ class GenerationPanel:
         if not self.generation_lyrics_dirty and lyrics!=self.generation_lyrics_source:
             self.generation_lyrics.blockSignals(True); self.generation_lyrics.setPlainText(lyrics); self.generation_lyrics.blockSignals(False)
             self.generation_lyrics_source=lyrics
-        document=self.score_panel.source.read() if getattr(self,'score_panel',None) and self.score_panel.source else None
+        document=self.score_panel.working_document() if getattr(self,'score_panel',None) else None
         abc=document.text if document and document.payload else ''
         abc_changed=abc!=self.generation_abc_source
         if not self.generation_abc_dirty and abc_changed:
@@ -276,6 +276,8 @@ class GenerationPanel:
         options={'guidance_scale':request['semantic_guidance'],'num_inference_steps':request['nar_steps'],
                  **semantic,**abc_sampling}
         self.generation_generate.setEnabled(False); self.generation_output_status.setText('Generating...')
+        self.generation_output_status.setStyleSheet(
+            'background-color:#dc2626;color:white;padding:5px 9px;border-radius:4px;font-weight:600;')
         self.generation_job=GenerationTask(
             lambda:runtime.generate_yue2(request['lyrics'],request['style'],abc,request['seed'],planning,
                                          self.generation_preview_dir.path(),options),self.generation_pane)
@@ -285,6 +287,7 @@ class GenerationPanel:
         self.generation_job.start()
 
     def generation_finished(self,result):
+        self.generation_output_status.setStyleSheet('')
         path=Path(result['path']); previous=self.generation_output_path
         self.generation_player.stop(); self.generation_player.setSource(QUrl())
         if previous and previous!=path:
@@ -300,9 +303,11 @@ class GenerationPanel:
         self.generation_play.setEnabled(True); self.generation_save.setEnabled(True)
 
     def generation_failed(self,message):
+        self.generation_output_status.setStyleSheet('')
         self.generation_output_status.setText('Generation failed: '+message)
 
     def generation_job_finished(self):
+        self.generation_output_status.setStyleSheet('')
         self.generation_generate.setEnabled(True)
         job=self.generation_job; self.generation_job=None
         if job is not None: job.deleteLater()
@@ -361,6 +366,7 @@ class GenerationPanel:
         if target: shutil.copy2(self.generation_output_path,target)
 
     def _cleanup_generation_preview(self,*_):
+        self.generation_output_status.setStyleSheet('')
         self.generation_gpu_timer.stop()
         job=self.generation_gpu_job
         if job is not None and job.isRunning(): job.wait(3500)

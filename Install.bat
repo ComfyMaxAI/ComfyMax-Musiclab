@@ -111,32 +111,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%install-audiocpp-
 if errorlevel 1 goto :INSTALL_FAILED
 
 echo.
-echo [4/8] Validating bundled SheetSage runtime...
-set "SHEETSAGE_RUNTIME=%ROOT%engines\sheetsage\runtime"
-for %%F in (
-    installation.json audiocpp_cli.exe ggml.dll ggml-base.dll ggml-cuda.dll cudart64_13.dll
-    cublas64_13.dll cublasLt64_13.dll cufft64_12.dll LICENSE
-) do (
-    if not exist "%SHEETSAGE_RUNTIME%\%%F" (
-        echo [ERROR] Missing bundled SheetSage runtime file: %%F
-        goto :INSTALL_FAILED
-    )
-)
-if not exist "%SHEETSAGE_RUNTIME%\model_specs\sheetsage2.json" (
-    echo [ERROR] Missing bundled SheetSage runtime file: model_specs\sheetsage2.json
-    goto :INSTALL_FAILED
-)
-echo [OK] SheetSage runtime files
-
-echo.
-echo [5/8] Creating model directories without downloading models...
-if not exist "%ROOT%models\yue2" mkdir "%ROOT%models\yue2"
-if not exist "%ROOT%models\sheetsage2" mkdir "%ROOT%models\sheetsage2"
-if not exist "%ROOT%.cache\whisper" mkdir "%ROOT%.cache\whisper"
-echo [OK] Model directories
-
-echo.
-echo [6/8] Installing Python environment and MusicLab dependencies...
+echo [4/8] Installing Python environment and MusicLab dependencies...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%setup.ps1"
 if errorlevel 1 goto :INSTALL_FAILED
 if not exist "%VENV_PYTHON%" (
@@ -146,10 +121,36 @@ if not exist "%VENV_PYTHON%" (
 echo [OK] Virtual environment
 
 echo.
+echo [5/8] Creating model directories without downloading models...
+if not exist "%ROOT%models\yue2" mkdir "%ROOT%models\yue2"
+if not exist "%ROOT%models\sheetsage2" mkdir "%ROOT%models\sheetsage2"
+if not exist "%ROOT%.cache\whisper" mkdir "%ROOT%.cache\whisper"
+echo [OK] Model directories
+
+echo.
+echo [6/8] Installing or validating SheetSage runtime...
+set "SHEETSAGE_RUNTIME=%ROOT%engines\sheetsage\runtime"
+"%VENV_PYTHON%" -c "from pathlib import Path; from comfymax_audio_chunker.music.sheetsage_setup import validate_runtime; validate_runtime(Path(r'%SHEETSAGE_RUNTIME%'))" >nul 2>&1
+if not errorlevel 1 (
+    echo [OK] SheetSage runtime
+    goto :SHEETSAGE_READY
+)
+echo [INFO] Installing SheetSage runtime...
+"%VENV_PYTHON%" -m comfymax_audio_chunker.music.sheetsage_setup --runtime-only
+if errorlevel 1 goto :INSTALL_FAILED
+"%VENV_PYTHON%" -c "from pathlib import Path; from comfymax_audio_chunker.music.sheetsage_setup import validate_runtime; validate_runtime(Path(r'%SHEETSAGE_RUNTIME%'))"
+if errorlevel 1 (
+    echo [ERROR] SheetSage runtime installation failed
+    goto :INSTALL_FAILED
+)
+echo [OK] SheetSage runtime
+:SHEETSAGE_READY
+
+echo.
 echo [7/8] Running installation self-check...
 "%VENV_PYTHON%" -c "import comfymax_audio_chunker, PySide6, faster_whisper, mido, sounddevice, soundfile, librosa, demucs; print('[OK] MusicLab dependencies'); print('[OK] Whisper runtime')"
 if errorlevel 1 goto :INSTALL_FAILED
-"%VENV_PYTHON%" -c "from pathlib import Path; from comfymax_audio_chunker.music.sheetsage_runtime import runtime_files; runtime_files(Path(r'%SHEETSAGE_RUNTIME%')); print('[OK] SheetSage')"
+"%VENV_PYTHON%" -c "from comfymax_audio_chunker.music import sheetsage_setup; print('[OK] SheetSage integration')"
 if errorlevel 1 goto :INSTALL_FAILED
 "%VENV_PYTHON%" -m pip check
 if errorlevel 1 goto :INSTALL_FAILED

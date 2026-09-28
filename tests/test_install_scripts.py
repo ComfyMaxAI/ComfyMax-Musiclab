@@ -36,7 +36,7 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn('cd /d "%~dp0"',script)
         self.assertNotIn('D:\\ComfyMax-Musiclab',script)
         self.assertNotIn('Install_SheetSage.bat',script)
-        self.assertNotIn('sheetsage_setup',script)
+        self.assertIn('comfymax_audio_chunker.music.sheetsage_setup --runtime-only',script)
         self.assertIn('Models are not installed automatically.',script)
         for folder in ('models\\yue2','models\\sheetsage2','.cache\\whisper'):
             self.assertIn(folder,script)
@@ -50,6 +50,17 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn(name,runtime)
         for package in ('comfymax_audio_chunker','PySide6','faster_whisper','mido','sounddevice','soundfile','librosa','demucs'):
             self.assertIn(package,script)
+
+    def test_sheetsage_runtime_install_follows_venv_and_never_requires_prebundled_manifest(self):
+        script=(ROOT/'Install.bat').read_text(encoding='utf-8')
+        self.assertLess(script.index('[4/8] Installing Python environment'),
+                        script.index('[6/8] Installing or validating SheetSage runtime'))
+        self.assertIn('[INFO] Installing SheetSage runtime...',script)
+        self.assertIn('[OK] SheetSage runtime',script)
+        self.assertIn('validate_runtime',script)
+        self.assertIn('--runtime-only',script)
+        self.assertNotIn('Missing bundled SheetSage runtime file: installation.json',script)
+        self.assertNotIn('models\\sheetsage2\\sheetsage2-orig.gguf',script)
 
     def test_audio_cpp_release_runtime_has_official_url_and_hash(self):
         script=(ROOT/'Install.bat').read_text(encoding='utf-8')

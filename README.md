@@ -78,7 +78,7 @@ The installer:
 
 - creates or reuses the local `.venv` Python environment;
 - installs the MusicLab Python dependencies, including the faster-whisper runtime;
-- validates the bundled SheetSage runtime;
+- installs or validates the SheetSage runtime without downloading SheetSage model weights;
 - validates the MusicLab-managed audio.cpp runtime and its required DLLs;
 - checks FFmpeg and installs a private MusicLab copy when necessary;
 - reports whether an NVIDIA GPU is visible.

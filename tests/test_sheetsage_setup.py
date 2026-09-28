@@ -23,6 +23,17 @@ class InstallationTests(unittest.TestCase):
         self.temp.cleanup()
     def install(self):
         with patch.object(setup.urllib.request,'urlopen',side_effect=AssertionError('Must use verified cache')): setup.setup(self.root,self.cache)
+    def install_runtime(self):
+        with patch.object(setup.urllib.request,'urlopen',side_effect=AssertionError('Must use verified cache')): setup.setup(self.root,self.cache,install_model=False)
+    def test_runtime_only_fresh_install_creates_real_manifest_without_model_and_is_idempotent(self):
+        install,model=runtime.locations(self.root)
+        self.assertFalse((install/'installation.json').exists())
+        self.install_runtime()
+        self.assertTrue((install/'installation.json').is_file());self.assertFalse(model.exists())
+        setup.validate_runtime(install)
+        stamp=(install/'installation.json').stat().st_mtime_ns
+        self.install_runtime()
+        self.assertEqual((install/'installation.json').stat().st_mtime_ns,stamp);self.assertFalse(model.exists())
     def test_complete_repeat_partial_and_reinstall(self):
         install,model=runtime.locations(self.root)
         with self.assertRaises(OSError):runtime.managed_config(self.root)

@@ -48,7 +48,16 @@ def extract(archive,stage):
                 with bundle.open(entry) as source,target.open('wb') as out: shutil.copyfileobj(source,out)
 
 
-def setup(root=runtime.APP_ROOT,cache=None):
+def validate_runtime(install):
+    install=Path(install)
+    runtime.runtime_files(install,full=True)
+    flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
+    result=subprocess.run([str(install/'audiocpp_cli.exe'),'--version'],cwd=install,
+                          capture_output=True,text=True,timeout=30,check=True,creationflags=flags)
+    if 'audio.cpp '+runtime.VERSION not in result.stdout: raise ValueError('Unexpected audio.cpp version')
+
+
+def setup(root=runtime.APP_ROOT,cache=None,install_model=True):
     root=Path(root).resolve(); cache=Path(cache).resolve() if cache else root/'.cache'/'sheetsage-downloads'
     cache.mkdir(parents=True,exist_ok=True)
     lock=root/'.cache'/'sheetsage-install.lock'; lock.parent.mkdir(parents=True,exist_ok=True)
@@ -57,8 +66,8 @@ def setup(root=runtime.APP_ROOT,cache=None):
     os.close(handle)
     try:
         install,model=runtime.locations(root)
-        try: runtime.runtime_files(install,full=True); ready=True
-        except (OSError,ValueError,KeyError,TypeError): ready=False
+        try: validate_runtime(install); ready=True
+        except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError): ready=False
         if ready:
             print('Runtime already verified; keeping existing installation.',flush=True)
         else:
@@ -69,10 +78,7 @@ def setup(root=runtime.APP_ROOT,cache=None):
                 if sha256(stage/'audiocpp_cli.exe')!=runtime.EXE_SHA: raise ValueError('Executable checksum mismatch')
                 files={p.relative_to(stage).as_posix():dict(bytes=p.stat().st_size,sha256=sha256(p)) for p in sorted(stage.rglob('*')) if p.is_file()}
                 (stage/'installation.json').write_text(json.dumps(dict(version=runtime.VERSION,archives=runtime.ARCHIVES,files=files),indent=2),encoding='utf8')
-                runtime.runtime_files(stage,full=True)
-                flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
-                result=subprocess.run([str(stage/'audiocpp_cli.exe'),'--version'],cwd=stage,capture_output=True,text=True,timeout=30,check=True,creationflags=flags)
-                if 'audio.cpp '+runtime.VERSION not in result.stdout: raise ValueError('Unexpected audio.cpp version')
+                validate_runtime(stage)
                 install.parent.mkdir(parents=True,exist_ok=True)
                 backup=None
                 if install.exists():
@@ -84,18 +90,22 @@ def setup(root=runtime.APP_ROOT,cache=None):
                     if backup is not None: backup.rename(install)
                     raise
                 print('Runtime installed and verified.',flush=True)
-        if model.is_file() and sha256(model)==runtime.MODEL_SHA:
-            print('Model already verified; keeping existing file.',flush=True)
+        if install_model:
+            if model.is_file() and sha256(model)==runtime.MODEL_SHA:
+                print('Model already verified; keeping existing file.',flush=True)
+            else:
+                downloaded=fetch(runtime.MODEL_URL,cache/'sheetsage2-orig.gguf',runtime.MODEL_SHA)
+                model.parent.mkdir(parents=True,exist_ok=True)
+                staging=model.with_suffix('.gguf.part')
+                try:
+                    shutil.copyfile(downloaded,staging)
+                    if sha256(staging)!=runtime.MODEL_SHA: raise ValueError('Installed model checksum mismatch')
+                    os.replace(staging,model)
+                finally: staging.unlink(missing_ok=True)
+            print('SheetSage2: Ready\nExecutable: '+str(install/'audiocpp_cli.exe')+'\nModel: '+str(model),flush=True)
         else:
-            downloaded=fetch(runtime.MODEL_URL,cache/'sheetsage2-orig.gguf',runtime.MODEL_SHA)
-            model.parent.mkdir(parents=True,exist_ok=True)
-            staging=model.with_suffix('.gguf.part')
-            try:
-                shutil.copyfile(downloaded,staging)
-                if sha256(staging)!=runtime.MODEL_SHA: raise ValueError('Installed model checksum mismatch')
-                os.replace(staging,model)
-            finally: staging.unlink(missing_ok=True)
-        print('SheetSage2: Ready\nExecutable: '+str(install/'audiocpp_cli.exe')+'\nModel: '+str(model),flush=True)
+            print('SheetSage runtime: Ready\nExecutable: '+str(install/'audiocpp_cli.exe'),flush=True)
+            print('SheetSage model weights were not downloaded.',flush=True)
         print('Optional CUDA backend; requires a compatible NVIDIA driver. No project data changed.',flush=True)
     finally:
         lock.unlink(missing_ok=True)
@@ -104,10 +114,12 @@ def setup(root=runtime.APP_ROOT,cache=None):
 def main():
     parser=argparse.ArgumentParser(description='Install pinned audio.cpp 0.8.1 and SheetSage2 (CC BY-NC 4.0; non-commercial use only).')
     parser.add_argument('--download-cache',type=Path,help='Optional verified download cache (never used for inference)')
+    parser.add_argument('--runtime-only',action='store_true',help='Install and verify the SheetSage runtime without model weights')
     args=parser.parse_args()
-    print('SheetSage2 model: CC BY-NC 4.0, non-commercial use only. See engines/sheetsage/README.md.\nDownloads: about 3.55 GB; allow 10 GB free space. Ctrl+C cancels safely.',flush=True)
+    if not args.runtime_only:
+        print('SheetSage2 model: CC BY-NC 4.0, non-commercial use only. See engines/sheetsage/README.md.\nDownloads: about 3.55 GB; allow 10 GB free space. Ctrl+C cancels safely.',flush=True)
     try:
-        setup(cache=args.download_cache)
+        setup(cache=args.download_cache,install_model=not args.runtime_only)
     except KeyboardInterrupt:
         print('Installation cancelled. Run Install_SheetSage.bat again to retry.'); return 130
     except Exception as exc:

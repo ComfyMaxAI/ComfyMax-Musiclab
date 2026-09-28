@@ -85,7 +85,7 @@ The installer:
 
 > **AI model weights are not downloaded by `Install.bat`.**
 
-The large audio.cpp Windows CUDA binaries are distributed separately from the normal Git repository as `audiocpp-runtime-windows-cuda.zip`. Until an official GitHub Release URL is configured, `Install.bat` only validates an already present runtime and clearly reports every missing file; it does not attempt a download. The repository-provided `engines/audiocpp/server.json` remains separate from the runtime ZIP.
+The large audio.cpp Windows CUDA binaries are distributed separately from the normal Git repository as `audiocpp-runtime-windows-cuda.zip`. When the runtime is missing, `Install.bat` downloads the package from the [`runtime-audiocpp-0.8.1` release](https://github.com/ComfyMaxAI/ComfyMax-Musiclab/releases/tag/runtime-audiocpp-0.8.1), verifies its SHA-256 before extraction, and then validates every required runtime file. The repository-provided `engines/audiocpp/server.json` remains separate and is not replaced.
 
 ### 3. Start MusicLab
 
@@ -186,7 +186,7 @@ No model inference is required for the regular mocked/unit test paths. Dedicated
 
 - **NVIDIA GPU not found:** update or install the appropriate NVIDIA driver and confirm that `nvidia-smi` works. MusicLab itself should still start, but CUDA features may be unavailable.
 - **Model is not configured:** open **Settings**, select an existing local model path, or use the available YuE2 model download controls.
-- **audio.cpp runtime unavailable:** rerun `Install.bat`. The installer reports every missing executable or DLL and separately validates the repository-provided `server.json`; it never uses an external audio.cpp installation. Automatic runtime download remains disabled until an official Release URL is configured.
+- **audio.cpp runtime unavailable:** rerun `Install.bat`. The installer downloads and verifies the official runtime package when needed, reports every missing executable or DLL, and separately validates the repository-provided `server.json`; it never uses an external audio.cpp installation.
 - **YuE2 generation cannot load a model:** verify both the YuE2 main model and VAE paths in Settings and confirm that the required sidecars exist.
 - **Python dependency error:** safely rerun `Install.bat`; it reuses a compatible existing environment and does not remove models, settings, projects, or outputs.
 

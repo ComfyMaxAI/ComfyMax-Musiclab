@@ -9,8 +9,7 @@ set "FFMPEG_DIR=%ROOT%engines\ffmpeg"
 set "FFMPEG_BIN=%FFMPEG_DIR%\bin"
 set "FFMPEG_EXE=%FFMPEG_BIN%\ffmpeg.exe"
 set "FFPROBE_EXE=%FFMPEG_BIN%\ffprobe.exe"
-rem Configure AUDIOCPP_RUNTIME_URL only after the release asset has been published.
-set "AUDIOCPP_RUNTIME_URL="
+set "AUDIOCPP_RUNTIME_URL=https://github.com/ComfyMaxAI/ComfyMax-Musiclab/releases/download/runtime-audiocpp-0.8.1/audiocpp-runtime-windows-cuda.zip"
 set "AUDIOCPP_RUNTIME_SHA256=5B2F0CDC4036B20D15C440D22B4B292FCBC09AD27C8D3E8366211CFDA6319B88"
 
 echo.
@@ -108,29 +107,8 @@ echo [OK] FFmpeg and ffprobe
 echo.
 echo [3/8] Validating MusicLab-managed audio.cpp runtime...
 set "AUDIOCPP=%ROOT%engines\audiocpp"
-if not exist "%AUDIOCPP%\server.json" (
-    echo [ERROR] Missing repository audio.cpp configuration: server.json
-    goto :INSTALL_FAILED
-)
-set "AUDIOCPP_MISSING="
-for %%F in (
-    audiocpp_server.exe ggml.dll ggml-base.dll ggml-cuda.dll ggml-cpu-haswell.dll
-    cublas64_13.dll cublasLt64_13.dll cufft64_12.dll
-    MSVCP140.dll MSVCP140_CODECVT_IDS.dll VCRUNTIME140.dll VCRUNTIME140_1.dll
-) do (
-    if not exist "%AUDIOCPP%\%%F" (
-        echo [MISSING] audio.cpp runtime file: %%F
-        set "AUDIOCPP_MISSING=1"
-    )
-)
-if defined AUDIOCPP_MISSING (
-    echo [ERROR] The audio.cpp Windows CUDA runtime must be downloaded before MusicLab can be installed.
-    echo [ERROR] Automatic runtime download is not available because no release URL is configured yet.
-    echo [INFO] Expected package: audiocpp-runtime-windows-cuda.zip
-    echo [INFO] Expected SHA-256: %AUDIOCPP_RUNTIME_SHA256%
-    goto :INSTALL_FAILED
-)
-echo [OK] audio.cpp runtime
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%install-audiocpp-runtime.ps1" -RuntimeDir "%AUDIOCPP%" -ReleaseUrl "%AUDIOCPP_RUNTIME_URL%" -ExpectedSha256 "%AUDIOCPP_RUNTIME_SHA256%"
+if errorlevel 1 goto :INSTALL_FAILED
 
 echo.
 echo [4/8] Validating bundled SheetSage runtime...

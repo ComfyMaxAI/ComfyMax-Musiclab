@@ -1,8 +1,33 @@
 import unittest
+import hashlib
+import subprocess
+import tempfile
+import zipfile
 from pathlib import Path
 
 
 ROOT=Path(__file__).resolve().parents[1]
+RUNTIME_HELPER=ROOT/'install-audiocpp-runtime.ps1'
+RUNTIME_FILES=(
+    'audiocpp_server.exe','cublas64_13.dll','cublasLt64_13.dll','cufft64_12.dll',
+    'ggml-base.dll','ggml-cpu-haswell.dll','ggml-cuda.dll','ggml.dll',
+    'MSVCP140_CODECVT_IDS.dll','MSVCP140.dll','VCRUNTIME140_1.dll','VCRUNTIME140.dll')
+
+
+def make_runtime_archive(path,missing=None,include_server=False):
+    missing=set(missing or ())
+    with zipfile.ZipFile(path,'w') as archive:
+        for name in RUNTIME_FILES:
+            if name not in missing: archive.writestr(name,('runtime-'+name).encode())
+        if include_server: archive.writestr('server.json',b'replaced')
+    return hashlib.sha256(path.read_bytes()).hexdigest().upper()
+
+
+def run_runtime_helper(runtime,archive,expected_hash,work):
+    return subprocess.run(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',str(RUNTIME_HELPER),
+        '-RuntimeDir',str(runtime),'-ReleaseUrl','https://invalid.example/runtime.zip',
+        '-ExpectedSha256',expected_hash,'-SourceArchive',str(archive),'-WorkingDirectory',str(work)],
+        capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30)
 
 
 class InstallScriptTests(unittest.TestCase):
@@ -18,21 +43,65 @@ class InstallScriptTests(unittest.TestCase):
 
     def test_installer_validates_bundled_runtimes_and_imports(self):
         script=(ROOT/'Install.bat').read_text(encoding='utf-8')
+        runtime=RUNTIME_HELPER.read_text(encoding='utf-8')
         for name in ('audiocpp_server.exe','server.json','ggml.dll','ggml-base.dll','ggml-cuda.dll',
                      'ggml-cpu-haswell.dll','cublas64_13.dll','cublasLt64_13.dll','cufft64_12.dll',
                      'MSVCP140.dll','MSVCP140_CODECVT_IDS.dll','VCRUNTIME140.dll','VCRUNTIME140_1.dll'):
-            self.assertIn(name,script)
+            self.assertIn(name,runtime)
         for package in ('comfymax_audio_chunker','PySide6','faster_whisper','mido','sounddevice','soundfile','librosa','demucs'):
             self.assertIn(package,script)
 
-    def test_audio_cpp_release_runtime_is_prepared_without_fake_download_url(self):
+    def test_audio_cpp_release_runtime_has_official_url_and_hash(self):
         script=(ROOT/'Install.bat').read_text(encoding='utf-8')
-        self.assertIn('set "AUDIOCPP_RUNTIME_URL="',script)
+        self.assertIn('https://github.com/ComfyMaxAI/ComfyMax-Musiclab/releases/download/runtime-audiocpp-0.8.1/audiocpp-runtime-windows-cuda.zip',script)
         self.assertIn('set "AUDIOCPP_RUNTIME_SHA256=5B2F0CDC4036B20D15C440D22B4B292FCBC09AD27C8D3E8366211CFDA6319B88"',script)
-        self.assertIn('audiocpp-runtime-windows-cuda.zip',script)
-        self.assertIn('no release URL is configured yet',script)
-        self.assertIn('Missing repository audio.cpp configuration: server.json',script)
-        self.assertNotIn('github.com/',script.lower())
+        self.assertIn('install-audiocpp-runtime.ps1',script)
+
+    def test_complete_audio_cpp_runtime_skips_download(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); runtime=root/'runtime'; runtime.mkdir(); (runtime/'server.json').write_text('{}')
+            for name in RUNTIME_FILES: (runtime/name).write_bytes(b'existing')
+            work=root/'work'; missing_archive=root/'does-not-exist.zip'
+            result=run_runtime_helper(runtime,missing_archive,'0'*64,work)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertIn('[OK] audio.cpp runtime',result.stdout)
+            self.assertNotIn('Downloading',result.stdout); self.assertFalse(work.exists())
+
+    def test_valid_audio_cpp_package_extracts_cleans_up_and_preserves_server(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); runtime=root/'runtime'; runtime.mkdir(); server=runtime/'server.json'
+            server.write_text('repository-config',encoding='utf-8')
+            archive=root/'runtime.zip'; digest=make_runtime_archive(archive,include_server=True); work=root/'work'
+            result=run_runtime_helper(runtime,archive,digest,work)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertIn('[INFO] Downloading audio.cpp Windows CUDA runtime...',result.stdout)
+            self.assertTrue(all((runtime/name).is_file() for name in RUNTIME_FILES))
+            self.assertEqual(server.read_text(encoding='utf-8'),'repository-config')
+            self.assertFalse(work.exists())
+
+    def test_wrong_audio_cpp_hash_stops_and_removes_temporary_download(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); runtime=root/'runtime'; runtime.mkdir(); (runtime/'server.json').write_text('{}')
+            archive=root/'runtime.zip'; make_runtime_archive(archive); work=root/'work'
+            result=run_runtime_helper(runtime,archive,'0'*64,work)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('SHA-256 mismatch',result.stdout)
+            self.assertFalse(any((runtime/name).exists() for name in RUNTIME_FILES)); self.assertFalse(work.exists())
+
+    def test_incomplete_audio_cpp_package_reports_exact_file_and_stops(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); runtime=root/'runtime'; runtime.mkdir(); (runtime/'server.json').write_text('{}')
+            archive=root/'runtime.zip'; digest=make_runtime_archive(archive,missing={'ggml-cuda.dll'}); work=root/'work'
+            result=run_runtime_helper(runtime,archive,digest,work)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('[MISSING] Extracted audio.cpp runtime file: ggml-cuda.dll',result.stdout)
+            self.assertIn('[ERROR] audio.cpp runtime installation failed',result.stdout)
+            self.assertFalse(work.exists())
+
+    def test_audio_cpp_installer_never_downloads_models(self):
+        helper=RUNTIME_HELPER.read_text(encoding='utf-8').lower()
+        for model_name in ('yue2','whisper','sheetsage','safetensors','.gguf'):
+            self.assertNotIn(model_name,helper)
 
     def test_setup_uses_python_311_dependency_metadata_and_no_test_or_model_install(self):
         setup=(ROOT/'setup.ps1').read_text(encoding='utf-8')

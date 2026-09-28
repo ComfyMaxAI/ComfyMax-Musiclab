@@ -1,259 +1,216 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-
 title ComfyMax MusicLab - Installer
 
-echo.
-echo ============================================================
-echo                  ComfyMax MusicLab
-echo                       Installer
-echo ============================================================
-echo.
-echo This installer will:
-echo.
-echo   - Install a local FFmpeg runtime when needed
-echo   - Set up Python 3.11
-echo   - Create the MusicLab virtual environment
-echo   - Install MusicLab and its dependencies
-echo   - Install CUDA-enabled PyTorch
-echo   - Run dependency checks
-echo   - Run the MusicLab test suite
-echo.
-echo SheetSage2 is optional and can be installed afterwards.
-echo.
-pause
-
-set "FFMPEG_DIR=%~dp0engines\ffmpeg"
+set "ROOT=%~dp0"
+set "VENV_PYTHON=%ROOT%.venv\Scripts\python.exe"
+set "FFMPEG_DIR=%ROOT%engines\ffmpeg"
 set "FFMPEG_BIN=%FFMPEG_DIR%\bin"
 set "FFMPEG_EXE=%FFMPEG_BIN%\ffmpeg.exe"
 set "FFPROBE_EXE=%FFMPEG_BIN%\ffprobe.exe"
+rem Configure AUDIOCPP_RUNTIME_URL only after the release asset has been published.
+set "AUDIOCPP_RUNTIME_URL="
+set "AUDIOCPP_RUNTIME_SHA256=5B2F0CDC4036B20D15C440D22B4B292FCBC09AD27C8D3E8366211CFDA6319B88"
 
 echo.
-echo [1/4] Checking FFmpeg...
+echo ============================================================
+echo                  ComfyMax MusicLab Installer
+echo ============================================================
+echo Models are not installed automatically.
 echo.
 
-if exist "%FFMPEG_EXE%" if exist "%FFPROBE_EXE%" (
-    echo Local FFmpeg found.
-    goto :FFMPEG_READY
+echo [1/8] Checking Python 3.11...
+if exist "%VENV_PYTHON%" (
+    "%VENV_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,11) else 1)" >nul 2>&1
+    if errorlevel 1 (
+        echo [ERROR] Existing .venv does not use Python 3.11.
+        echo Remove or rename .venv yourself, install Python 3.11 64-bit, and rerun Install.bat.
+        goto :INSTALL_FAILED
+    )
+    echo [OK] Python 3.11 in existing virtual environment
+    goto :PYTHON_READY
 )
 
-echo Local FFmpeg was not found.
+py -3.11 -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3,11) and sys.maxsize ^> 2**32 else 1)" >nul 2>&1
+if not errorlevel 1 (
+    echo [OK] System Python 3.11 64-bit detected
+    goto :PYTHON_READY
+)
+
+where uv.exe >nul 2>&1
+if not errorlevel 1 (
+    echo [WARNING] System Python 3.11 was not found.
+    echo The existing setup uses uv to install project-local CPython 3.11.15.
+    goto :PYTHON_READY
+)
+
+echo [ERROR] Python 3.11 64-bit is required and was not found.
+echo Install Python 3.11 from python.org, then rerun Install.bat.
+goto :INSTALL_FAILED
+
+:PYTHON_READY
 echo.
-echo Checking for an existing system FFmpeg installation...
+echo [2/8] Checking FFmpeg...
+if exist "%FFMPEG_EXE%" if exist "%FFPROBE_EXE%" (
+    set "PATH=%FFMPEG_BIN%;%PATH%"
+    goto :VERIFY_FFMPEG
+)
 
-where ffmpeg >nul 2>&1
+where ffmpeg.exe >nul 2>&1
 if errorlevel 1 goto :INSTALL_FFMPEG
-
-where ffprobe >nul 2>&1
+where ffprobe.exe >nul 2>&1
 if errorlevel 1 goto :INSTALL_FFMPEG
-
-echo System FFmpeg found.
-echo.
-echo MusicLab can use the existing system installation.
-goto :FFMPEG_READY
-
+goto :VERIFY_FFMPEG
 
 :INSTALL_FFMPEG
-echo.
-echo FFmpeg is not installed.
-echo MusicLab will now install a private local copy.
-echo.
-echo Destination:
-echo   %FFMPEG_DIR%
-echo.
-
+echo [WARNING] FFmpeg with ffprobe was not found. Installing the existing private MusicLab FFmpeg runtime...
 where curl.exe >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] curl.exe is not available on this Windows installation.
+    echo [ERROR] curl.exe is required to install FFmpeg.
     goto :INSTALL_FAILED
 )
-
 where tar.exe >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] tar.exe is not available on this Windows installation.
+    echo [ERROR] tar.exe is required to extract FFmpeg.
     goto :INSTALL_FAILED
 )
-
 set "FFMPEG_ZIP=%TEMP%\comfymax-ffmpeg.zip"
 set "FFMPEG_TMP=%TEMP%\comfymax-ffmpeg-extract"
-
 if exist "%FFMPEG_ZIP%" del /q "%FFMPEG_ZIP%"
 if exist "%FFMPEG_TMP%" rmdir /s /q "%FFMPEG_TMP%"
-
 mkdir "%FFMPEG_TMP%" >nul 2>&1
-
-echo Downloading FFmpeg...
-echo.
-
-curl.exe -L --fail --progress-bar ^
-  "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" ^
-  -o "%FFMPEG_ZIP%"
-
-if errorlevel 1 (
-    echo.
-    echo [ERROR] FFmpeg download failed.
-    goto :FFMPEG_FAILED
-)
-
-echo.
-echo Extracting FFmpeg...
-echo.
-
+curl.exe -L --fail --progress-bar "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -o "%FFMPEG_ZIP%"
+if errorlevel 1 goto :FFMPEG_FAILED
 tar.exe -xf "%FFMPEG_ZIP%" -C "%FFMPEG_TMP%"
-
-if errorlevel 1 (
-    echo.
-    echo [ERROR] FFmpeg extraction failed.
-    goto :FFMPEG_FAILED
-)
-
-if exist "%FFMPEG_DIR%" rmdir /s /q "%FFMPEG_DIR%"
-mkdir "%FFMPEG_DIR%" >nul 2>&1
-
-for /d %%D in ("%FFMPEG_TMP%\ffmpeg-*") do (
-    if exist "%%D\bin\ffmpeg.exe" (
-        xcopy "%%D\*" "%FFMPEG_DIR%\" /E /I /Q /Y >nul
-        goto :FFMPEG_COPIED
-    )
-)
-
-echo.
-echo [ERROR] Could not locate ffmpeg.exe in the downloaded archive.
-goto :FFMPEG_FAILED
-
-
-:FFMPEG_COPIED
-
-if not exist "%FFMPEG_EXE%" (
-    echo.
-    echo [ERROR] Local ffmpeg.exe was not installed correctly.
-    goto :FFMPEG_FAILED
-)
-
-if not exist "%FFPROBE_EXE%" (
-    echo.
-    echo [ERROR] Local ffprobe.exe was not installed correctly.
-    goto :FFMPEG_FAILED
-)
-
-echo.
-echo Local FFmpeg installed successfully.
-
+if errorlevel 1 goto :FFMPEG_FAILED
+if not exist "%FFMPEG_DIR%" mkdir "%FFMPEG_DIR%" >nul 2>&1
+for /d %%D in ("%FFMPEG_TMP%\ffmpeg-*") do if exist "%%D\bin\ffmpeg.exe" xcopy "%%D\*" "%FFMPEG_DIR%\" /E /I /Q /Y >nul
+if not exist "%FFMPEG_EXE%" goto :FFMPEG_FAILED
+if not exist "%FFPROBE_EXE%" goto :FFMPEG_FAILED
 del /q "%FFMPEG_ZIP%" >nul 2>&1
 rmdir /s /q "%FFMPEG_TMP%" >nul 2>&1
+set "PATH=%FFMPEG_BIN%;%PATH%"
 
-
-:FFMPEG_READY
-
-REM Put project-local FFmpeg first on PATH for setup.ps1 and child processes.
-if exist "%FFMPEG_BIN%\ffmpeg.exe" (
-    set "PATH=%FFMPEG_BIN%;%PATH%"
-)
-
-echo.
-echo Verifying FFmpeg...
-echo.
-
+:VERIFY_FFMPEG
 ffmpeg -version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] ffmpeg could not be started.
     goto :INSTALL_FAILED
 )
-
 ffprobe -version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] ffprobe could not be started.
     goto :INSTALL_FAILED
 )
-
-echo FFmpeg OK.
+echo [OK] FFmpeg and ffprobe
 
 echo.
-echo [2/4] Installing ComfyMax MusicLab...
-echo.
-echo This may take several minutes.
-echo.
+echo [3/8] Validating MusicLab-managed audio.cpp runtime...
+set "AUDIOCPP=%ROOT%engines\audiocpp"
+if not exist "%AUDIOCPP%\server.json" (
+    echo [ERROR] Missing repository audio.cpp configuration: server.json
+    goto :INSTALL_FAILED
+)
+set "AUDIOCPP_MISSING="
+for %%F in (
+    audiocpp_server.exe ggml.dll ggml-base.dll ggml-cuda.dll ggml-cpu-haswell.dll
+    cublas64_13.dll cublasLt64_13.dll cufft64_12.dll
+    MSVCP140.dll MSVCP140_CODECVT_IDS.dll VCRUNTIME140.dll VCRUNTIME140_1.dll
+) do (
+    if not exist "%AUDIOCPP%\%%F" (
+        echo [MISSING] audio.cpp runtime file: %%F
+        set "AUDIOCPP_MISSING=1"
+    )
+)
+if defined AUDIOCPP_MISSING (
+    echo [ERROR] The audio.cpp Windows CUDA runtime must be downloaded before MusicLab can be installed.
+    echo [ERROR] Automatic runtime download is not available because no release URL is configured yet.
+    echo [INFO] Expected package: audiocpp-runtime-windows-cuda.zip
+    echo [INFO] Expected SHA-256: %AUDIOCPP_RUNTIME_SHA256%
+    goto :INSTALL_FAILED
+)
+echo [OK] audio.cpp runtime
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup.ps1"
+echo.
+echo [4/8] Validating bundled SheetSage runtime...
+set "SHEETSAGE_RUNTIME=%ROOT%engines\sheetsage\runtime"
+for %%F in (
+    installation.json audiocpp_cli.exe ggml.dll ggml-base.dll ggml-cuda.dll cudart64_13.dll
+    cublas64_13.dll cublasLt64_13.dll cufft64_12.dll LICENSE
+) do (
+    if not exist "%SHEETSAGE_RUNTIME%\%%F" (
+        echo [ERROR] Missing bundled SheetSage runtime file: %%F
+        goto :INSTALL_FAILED
+    )
+)
+if not exist "%SHEETSAGE_RUNTIME%\model_specs\sheetsage2.json" (
+    echo [ERROR] Missing bundled SheetSage runtime file: model_specs\sheetsage2.json
+    goto :INSTALL_FAILED
+)
+echo [OK] SheetSage runtime files
 
+echo.
+echo [5/8] Creating model directories without downloading models...
+if not exist "%ROOT%models\yue2" mkdir "%ROOT%models\yue2"
+if not exist "%ROOT%models\sheetsage2" mkdir "%ROOT%models\sheetsage2"
+if not exist "%ROOT%.cache\whisper" mkdir "%ROOT%.cache\whisper"
+echo [OK] Model directories
+
+echo.
+echo [6/8] Installing Python environment and MusicLab dependencies...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%setup.ps1"
 if errorlevel 1 goto :INSTALL_FAILED
-
-echo.
-echo [3/4] Verifying MusicLab...
-echo.
-
-if not exist "%~dp0.venv\Scripts\python.exe" (
+if not exist "%VENV_PYTHON%" (
     echo [ERROR] MusicLab virtual environment was not created.
     goto :INSTALL_FAILED
 )
-
-echo MusicLab environment OK.
+echo [OK] Virtual environment
 
 echo.
-echo [4/4] Installation completed successfully.
+echo [7/8] Running installation self-check...
+"%VENV_PYTHON%" -c "import comfymax_audio_chunker, PySide6, faster_whisper, mido, sounddevice, soundfile, librosa, demucs; print('[OK] MusicLab dependencies'); print('[OK] Whisper runtime')"
+if errorlevel 1 goto :INSTALL_FAILED
+"%VENV_PYTHON%" -c "from pathlib import Path; from comfymax_audio_chunker.music.sheetsage_runtime import runtime_files; runtime_files(Path(r'%SHEETSAGE_RUNTIME%')); print('[OK] SheetSage')"
+if errorlevel 1 goto :INSTALL_FAILED
+"%VENV_PYTHON%" -m pip check
+if errorlevel 1 goto :INSTALL_FAILED
+echo [OK] Python
+
+echo.
+echo [8/8] Checking NVIDIA GPU...
+where nvidia-smi.exe >nul 2>&1
+if errorlevel 1 (
+    echo [WARNING] nvidia-smi was not found. GPU-accelerated functions may not be available.
+) else (
+    for /f "usebackq delims=" %%G in (`nvidia-smi --query-gpu^=name --format^=csv^,noheader 2^>nul`) do echo [OK] NVIDIA GPU detected: %%G
+)
+
+echo.
+echo Models are not installed automatically.
+echo Use MusicLab Settings to install/select models.
 echo.
 echo ============================================================
-echo              ComfyMax MusicLab is ready!
+echo MusicLab installation complete.
+echo Start MusicLab with: Launch Editor.cmd
 echo ============================================================
 echo.
-echo Start MusicLab with:
-echo.
-echo     Launch Editor.cmd
-echo.
-echo Optional SheetSage2 support can be installed with:
-echo.
-echo     Install_SheetSage.bat
-echo.
-
-choice /C YN /N /M "Install optional SheetSage2 now? [Y/N]: "
-
-if errorlevel 2 goto :DONE
-if errorlevel 1 goto :INSTALL_SHEETSAGE
-
-
-:INSTALL_SHEETSAGE
-echo.
-echo Starting SheetSage2 installer...
-echo.
-
-call "%~dp0Install_SheetSage.bat"
-
-goto :DONE
-
+pause
+exit /b 0
 
 :FFMPEG_FAILED
 if exist "%FFMPEG_ZIP%" del /q "%FFMPEG_ZIP%" >nul 2>&1
 if exist "%FFMPEG_TMP%" rmdir /s /q "%FFMPEG_TMP%" >nul 2>&1
+echo [ERROR] The private FFmpeg runtime could not be installed.
 goto :INSTALL_FAILED
-
 
 :INSTALL_FAILED
 echo.
 echo ============================================================
-echo                 INSTALLATION FAILED
+echo [ERROR] MusicLab installation failed.
+echo Correct the error above and safely rerun Install.bat.
+echo Existing models, settings, projects and outputs were not removed.
 echo ============================================================
-echo.
-echo MusicLab could not be installed completely.
-echo.
-echo Review the error messages above.
-echo.
-echo Nothing has been deleted from your projects.
-echo You can run Install.bat again after correcting the problem.
 echo.
 pause
 exit /b 1
-
-
-:DONE
-echo.
-echo ============================================================
-echo                         DONE
-echo ============================================================
-echo.
-echo You can now start ComfyMax MusicLab with:
-echo.
-echo     Launch Editor.cmd
-echo.
-pause
-exit /b 0

@@ -8,7 +8,7 @@ function Run-Checked {
     if ($LASTEXITCODE -ne 0) { throw "Command failed ($LASTEXITCODE): $Exe" }
 }
 # Optional project-local FFmpeg
-$LocalFFmpegBin = Join-Path $PSScriptRoot 'ffmpeg\bin'
+$LocalFFmpegBin = Join-Path $PSScriptRoot 'engines\ffmpeg\bin'
 
 if (
     (Test-Path (Join-Path $LocalFFmpegBin "ffmpeg.exe")) -and
@@ -24,8 +24,8 @@ if (-not (Test-Path $PythonExe)) {
     if (Get-Command uv -ErrorAction SilentlyContinue) {
         $env:UV_PYTHON_INSTALL_DIR = Join-Path $PSScriptRoot '.python'
         $env:UV_CACHE_DIR = Join-Path $PSScriptRoot '.cache\uv'
-        Run-Checked 'uv' @('python','install','3.11','--no-bin','--no-registry')
-        Run-Checked 'uv' @('venv','--python','3.11','--seed','.venv')
+        Run-Checked 'uv' @('python','install','3.11.15','--no-bin','--no-registry')
+        Run-Checked 'uv' @('venv','--python','3.11.15','--seed','.venv')
     } else {
         if (-not (Get-Command py -ErrorAction SilentlyContinue)) { throw 'Install Python 3.11 (64-bit) from python.org, then rerun setup.' }
         Run-Checked 'py' @('-3.11','-m','venv','.venv')
@@ -38,6 +38,5 @@ if ($CpuOnly) { $Index = 'https://download.pytorch.org/whl/cpu' }
 Run-Checked $PythonExe @('-m','pip','install','torch==2.8.0','torchaudio==2.8.0','--index-url',$Index)
 Run-Checked $PythonExe @('-m','pip','install','-e','.[editor]')
 Run-Checked $PythonExe @('-m','pip','check')
-Run-Checked $PythonExe @('-m','unittest','discover','-s','tests','-v')
 & $PythonExe -m pip freeze | ForEach-Object { if ($_ -match '^-e ') { '-e .' } else { $_ } } | Set-Content -Encoding UTF8 'installed-versions.txt'
-Write-Host 'Ready. Run Launch Editor.cmd. Optional SheetSage2 support: Install_SheetSage.bat.'
+Write-Host 'Python environment and MusicLab dependencies are ready.'

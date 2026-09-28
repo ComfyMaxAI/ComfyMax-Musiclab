@@ -1,5 +1,6 @@
 # Python environments
 .venv/
+venv/
 .python/
 
 # Python cache
@@ -8,13 +9,29 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+dist/
 
 # Local FFmpeg runtime
 engines/ffmpeg/
 
+# audio.cpp release runtime; server configuration remains in the repository
+engines/audiocpp/*.exe
+engines/audiocpp/*.dll
+!engines/audiocpp/server.json
+
 # User projects and generated output
 projects/
 runs/
+outputs/*
+!outputs/.gitkeep
+test-output.txt
 
 # Logs
 *.log
@@ -35,7 +52,13 @@ desktop.ini
 
 # Optional managed SheetSage downloads, never source distribution
 engines/sheetsage/runtime/
-models/sheetsage2/
+
+# Downloaded model packages (weights, configs, tokenizers, and sidecars)
+models/*
+!models/.gitkeep
+!models/*/
+models/*/**
+!models/*/.gitkeep
 *.gguf
 *.part
 *.comfymax/

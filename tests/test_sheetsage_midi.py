@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock,patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import mido
@@ -35,6 +35,32 @@ class MidiTests(unittest.TestCase):
         if known: e['provenance']=dict(executable_sha256=music.KNOWN_EXE,model_sha256=music.KNOWN_MODEL)
         return e
 
+    @staticmethod
+    def analysis(regions,bars,rate=10):
+        return dict(timeline=dict(sample_rate=rate,frames=bars[-1]),
+                    bars=[dict(start_frame=a,end_frame=b) for a,b in zip(bars,bars[1:])],
+                    regions=[dict(root_pc=0,quality='maj',start_frame=a,end_frame=b,
+                                  manual=dict(label=label,start_frame=None,end_frame=None))
+                             for a,b,label in regions])
+
+    @staticmethod
+    def chord_markers(path):
+        parsed=mido.MidiFile(path); track=next(t for t in parsed.tracks if t.name=='Chords')
+        position=0; result=[]
+        for message in track:
+            position+=message.time
+            if message.type=='marker': result.append((position,message.text))
+        return parsed,track,result
+
+    @staticmethod
+    def chord_notes(track):
+        position=0; result=[]
+        for message in track:
+            position+=message.time
+            if message.type in ('note_on','note_off'):
+                result.append((position,message.type,message.note,message.velocity))
+        return result
+
     def test_constant_120_90_beat_between_bar_crossing_roundtrip(self):
         for bpm in (120,90):
             beat=60/bpm
@@ -47,6 +73,64 @@ class MidiTests(unittest.TestCase):
             self.assertEqual((read.type,read.ticks_per_beat,len(read.tracks)),(1,960,2))
             self.assertEqual([m.note for m in read.tracks[1] if m.type=='note_on'],[60,61,62,63,64])
             self.assertEqual([m.velocity for m in read.tracks[1] if m.type=='note_on'],[80]*5)
+
+    def test_chord_markers_and_notes_repeat_at_every_bar(self):
+        cases=[
+            ([(0,10,'C')],[0,10],['C']),
+            ([(0,30,'C')],[0,10,20,30],['C','C','C']),
+            ([(0,20,'C'),(20,40,'Am')],[0,10,20,30,40],['C','C','Am','Am']),
+        ]
+        for index,(regions,bars,labels) in enumerate(cases):
+            path=self.root/f'chords-{index}.mid'
+            result=self.write(name=path.name,analysis=self.analysis(regions,bars))
+            parsed,track,markers=self.chord_markers(path)
+            self.assertEqual([label for _,label in markers],labels)
+            self.assertEqual([tick for tick,_ in markers],[i*1920 for i in range(len(labels))])
+            notes=self.chord_notes(track)
+            self.assertEqual(len([n for n in notes if n[1]=='note_on']),3*len(labels))
+            self.assertEqual(len([n for n in notes if n[1]=='note_off']),3*len(labels))
+            self.assertEqual(result['chord_event_count'],len(labels)); self.assertEqual(result['chord_event_type'],'marker')
+            self.assertEqual(parsed.ticks_per_beat,midi.PPQ)
+
+    def test_supported_chords_write_expected_note_numbers_and_block_ends(self):
+        analysis=self.analysis([(0,10,'C'),(10,20,'Am'),(20,30,'G7')],[0,10,20,30])
+        result=self.write(name='voicings.mid',analysis=analysis)
+        _,track,markers=self.chord_markers(self.root/'voicings.mid'); notes=self.chord_notes(track)
+        starts={tick:[note for at,kind,note,velocity in notes if at==tick and kind=='note_on' and velocity]
+                for tick in (0,1920,3840)}
+        ends={tick:[note for at,kind,note,_ in notes if at==tick and kind=='note_off']
+              for tick in (1920,3840,5760)}
+        self.assertEqual(starts,{0:[48,52,55],1920:[57,60,64],3840:[55,59,62,65]})
+        self.assertEqual(ends,{1920:[48,52,55],3840:[57,60,64],5760:[55,59,62,65]})
+        self.assertEqual([label for _,label in markers],['C','Am','G7'])
+        self.assertEqual(result['chord_note_count'],10)
+
+    def test_three_c_bars_are_three_separate_note_blocks(self):
+        self.write(name='three-c.mid',analysis=self.analysis([(0,30,'C')],[0,10,20,30]))
+        _,track,_=self.chord_markers(self.root/'three-c.mid'); notes=self.chord_notes(track)
+        self.assertEqual([(tick,note) for tick,kind,note,velocity in notes if kind=='note_on' and velocity],
+                         [(tick,note) for tick in (0,1920,3840) for note in (48,52,55)])
+        self.assertEqual([(tick,note) for tick,kind,note,_ in notes if kind=='note_off'],
+                         [(tick,note) for tick in (1920,3840,5760) for note in (48,52,55)])
+
+    def test_chord_change_inside_bar_is_retained_and_source_duplicates_merge(self):
+        analysis=self.analysis([(0,3,'C'),(3,5,'C'),(5,10,'G'),(10,20,'F')],[0,10,20])
+        self.write(name='internal.mid',analysis=analysis)
+        _,_,markers=self.chord_markers(self.root/'internal.mid')
+        self.assertEqual(markers,[(0,'C'),(960,'G'),(1920,'F')])
+
+    def test_chord_metadata_does_not_change_existing_melody_events(self):
+        notes=[dict(start=0,end=.5,pitch=60,track=0),dict(start=.5,end=1,pitch=64,track=0)]
+        self.write(evidence(notes),'plain.mid')
+        self.write(evidence(notes),'with-chords.mid',analysis=self.analysis([(0,20,'C')],[0,10,20]))
+        def melody(path):
+            track=mido.MidiFile(path).tracks[1]; position=0; result=[]
+            for message in track:
+                position+=message.time
+                if message.type in ('note_on','note_off'):
+                    result.append((position,message.type,message.channel,message.note,message.velocity))
+            return result
+        self.assertEqual(melody(self.root/'plain.mid'),melody(self.root/'with-chords.mid'))
 
     def test_simultaneous_overlapping_nested_same_pitch_and_order(self):
         notes=[dict(start=s,end=t,pitch=p,track=k) for s,t,p,k in [(0,2,60,0),(0,1,64,0),(.25,.75,60,0),(.25,3,60,0),(1,2,67,1),(2,3,60,0)]]
@@ -159,10 +243,10 @@ class MidiTests(unittest.TestCase):
         self.assertGreater(r['timing']['midi_note_duration_seconds'],0)
 
     def test_readback_detects_tampering(self):
-        e=music.musical_events(evidence(),self.root);payload,notes,meta,tracks,adj,step=midi.build(e)
+        e=music.musical_events(evidence(),self.root);payload,notes,meta,tracks,adj,step,chords=midi.build(e)
         f=mido.MidiFile(file=io.BytesIO(payload));next(m for m in f.tracks[1] if m.type=='note_on').note=61
         stream=io.BytesIO();f.save(file=stream)
-        with self.assertRaisesRegex(ValueError,'note off'):midi.verify(stream.getvalue(),notes,meta,tracks,step)
+        with self.assertRaisesRegex(ValueError,'note off'):midi.verify(stream.getvalue(),notes,meta,tracks,step,chords)
 
     def test_optional_dependency_missing_disables_only_export(self):
         with patch.object(midi.importlib.util,'find_spec',return_value=None):self.assertFalse(midi.available(evidence()))
@@ -191,6 +275,17 @@ class MidiEditorTests(unittest.TestCase):
         w.doc.data['music_analysis']['analysis']['source_sha256']=w.doc.data['assets']['mix']['sha256']
         w.doc.data['music_analysis']['sheet_sage']=evidence()
         w.refresh_music()
+
+    def test_sheetsage_has_no_toggle_and_is_always_attached_to_analysis(self):
+        class Job:
+            def __init__(self):
+                self.progress=Mock(); self.ready=Mock(); self.failed=Mock(); self.cancelled=Mock(); self.finished=Mock()
+                self.start=Mock(); self.previous=None; self.sheet_root=None; self.sheet_audio=None
+        job=Job(); w=self.window
+        with patch('comfymax_audio_chunker.editor.music_panel.MusicTask',return_value=job): w.analyze_music()
+        self.assertFalse(hasattr(w,'include_sheetsage')); self.assertEqual(job.sheet_root,w.doc.root)
+        self.assertEqual(job.sheet_audio,w.doc.root/w.doc.data['assets']['mix']['path']); job.start.assert_called_once()
+        w.music_job=None; w.busy=False; w.dirty=False
 
     def test_old_project_without_sheetsage_is_disabled(self):
         self.assertFalse(self.window.export_midi_button.isEnabled())

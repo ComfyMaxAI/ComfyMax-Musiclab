@@ -62,9 +62,7 @@ class MusicPanel:
         self.music_pane = QWidget(self); self.music_pane.hide(); layout = QVBoxLayout(self.music_pane)
         buttons = QHBoxLayout()
         self.analyze_music_button = QPushButton('Analyze Music'); header.addWidget(self.analyze_music_button)
-        self.include_sheetsage = QCheckBox('SheetSage2'); header.addWidget(self.include_sheetsage)
         available, message = sheetsage.availability()
-        self.include_sheetsage.setToolTip(message+'\nOptional independent evidence. With an existing analysis, only SheetSage runs; rhythm/chords/manual corrections are retained.')
         self.sheet_status = QLabel('SheetSage2: '+message); self.sheet_status.setWordWrap(True)
         layout.addWidget(self.sheet_status)
         self.view_sheet_abc = QPushButton('View SheetSage ABC'); self.view_sheet_abc.setEnabled(False)
@@ -109,7 +107,7 @@ class MusicPanel:
             return
         previous = self.doc.data.get('music_analysis')
         try:
-            if not (self.include_sheetsage.isChecked() and previous):
+            if not previous:
                 replacement(previous, {})  # Reject destructive replacement of future overrides up front.
         except ValueError as exc:
             QMessageBox.warning(self, 'Music analysis', str(exc)); return
@@ -117,10 +115,8 @@ class MusicPanel:
         job = MusicTask(self.transport.arrays['mix'], self.transport.rate,
                         self.doc.data['assets']['mix'].get('sha256'), self)
         job.previous = copy.deepcopy(previous)
-        if self.include_sheetsage.isChecked():
-            job.sheet_root = self.doc.root
-            job.sheet_audio = self.doc.root / self.doc.data['assets']['mix']['path']
-        self.include_sheetsage.setEnabled(False)
+        job.sheet_root = self.doc.root
+        job.sheet_audio = self.doc.root / self.doc.data['assets']['mix']['path']
         self.music_job = job; self.jobs.append(job)
         self.music_project_id = self.doc.data['project_id']
         # Keep playback and scrolling responsive; block project mutation/switching only.
@@ -181,7 +177,6 @@ class MusicPanel:
     def music_finished(self, job):
         self.music_job = None; self.busy = False
         self.export_midi_button.setEnabled(sheetsage_midi.available(self.doc.data.get('music_analysis', {}).get('sheet_sage')))
-        self.include_sheetsage.setEnabled(True)
         for button in (self.load_button,self.open_button,self.import_button,self.save_button,self.save_as_button):
             button.setEnabled(True)
         for i in range(self.tabs.count()): self.tabs.setTabEnabled(i,True)
@@ -218,7 +213,7 @@ class MusicPanel:
                     f'Replace the existing MIDI file?\n{target}', QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No) != QMessageBox.Yes:
                 return
-            result = sheetsage_midi.export(evidence, self.doc.root, target, overwrite=overwrite)
+            result = sheetsage_midi.export(evidence, self.doc.root, target, overwrite=overwrite,analysis=self.doc.data['music_analysis'])
             self.doc.data['midi_export'] = result
             self.changed()
             self.status.setText('MIDI exported successfully')

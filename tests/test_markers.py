@@ -138,7 +138,8 @@ class MarkerGuiTests(unittest.TestCase):
         w.select_marker(0); self.assertFalse(w.delete_button.isEnabled()); self.assertFalse(w.move_button.isEnabled())
     def test_autosave_recovery_and_readonly_aid(self):
         w=self.w; w.seek(.04); w.add_at_playhead(); w.create_scene_snapshot()
-        w.transcript_toggle.setChecked(True); self.assertEqual(w.tabs.count(),3)
+        self.assertFalse(hasattr(w,'transcript_toggle'))
+        self.assertGreaterEqual(w.tabs.indexOf(w.transcript_pane),0)
         QTest.qWait(1400); self.assertFalse(w.dirty)
         expected=copy.deepcopy(w.state); w.doc.close(); w.doc=Document.open(w.doc.root)
         self.assertEqual(w.doc.data['marker_editor'],expected); self.assertEqual(w.doc.phrases,self.evidence)

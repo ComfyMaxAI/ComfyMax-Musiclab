@@ -10,10 +10,24 @@ import re
 import tempfile
 
 from .sheetsage_music import musical_events, suitable
+from .model import effective_chord
 
 PPQ = 960  # <= 0.4341 ms nearest-tick error at 72 BPM; native timestamp bins are 10 ms.
-VERSION = '1'
+VERSION = '2'
 CHANNELS = tuple(c for c in range(16) if c != 9)
+CHORD_CHANNEL = 0
+CHORD_VELOCITY = 72
+CHORD_INTERVALS = {
+    '': (0,4,7), 'maj': (0,4,7), 'm': (0,3,7), 'min': (0,3,7),
+    '7': (0,4,7,10), 'm7': (0,3,7,10), 'min7': (0,3,7,10),
+    'maj7': (0,4,7,11), 'dim': (0,3,6), 'aug': (0,4,8),
+    'dim7': (0,3,6,9), 'hdim7': (0,3,6,10), 'sus2': (0,2,7),
+    'sus4': (0,5,7), 'sus4(b7)': (0,5,7,10), '9': (0,4,7,10,14),
+    'maj9': (0,4,7,11,14), 'm9': (0,3,7,10,14), 'min9': (0,3,7,10,14),
+    '11': (0,4,7,10,14,17), '13': (0,4,7,10,14,17,21),
+}
+ROOTS={'C':0,'C#':1,'Db':1,'D':2,'D#':3,'Eb':3,'E':4,'F':5,'F#':6,'Gb':6,
+       'G':7,'G#':8,'Ab':8,'A':9,'A#':10,'Bb':10,'B':11}
 
 
 def available(evidence):
@@ -46,6 +60,48 @@ def _mido():
         return mido
     except ImportError as exc:
         raise ValueError('MIDI export requires mido==1.3.3. Run setup.ps1 to install editor dependencies.') from exc
+
+
+def chord_blocks(analysis):
+    """Split existing final chord regions at every stored bar boundary."""
+    if not isinstance(analysis,dict): return []
+    rate=analysis.get('timeline',{}).get('sample_rate')
+    bars=analysis.get('bars',[]); regions=analysis.get('regions',[])
+    if type(rate) is not int or rate<=0 or not isinstance(bars,list) or not isinstance(regions,list): return []
+    chords=[]
+    for region in regions:
+        if not isinstance(region,dict): continue
+        value=effective_chord(region)
+        if (not isinstance(value.get('label'),str) or not value['label'] or
+                type(value.get('start_frame')) is not int or type(value.get('end_frame')) is not int):
+            continue
+        chords.append(value)
+    chords.sort(key=lambda item:(item['start_frame'],item['end_frame']))
+    blocks=[]
+    for bar in sorted((b for b in bars if isinstance(b,dict)),key=lambda item:item.get('start_frame',-1)):
+        start,end=bar.get('start_frame'),bar.get('end_frame')
+        if type(start) is not int or type(end) is not int or not 0<=start<end: continue
+        current=[]
+        for chord in chords:
+            left=max(start,chord['start_frame']); right=min(end,chord['end_frame'])
+            if left>=right: continue
+            if current and current[-1]['label']==chord['label'] and current[-1]['end_frame']==left:
+                current[-1]['end_frame']=right
+            else:
+                current.append(dict(label=chord['label'],start_frame=left,end_frame=right))
+        blocks.extend(dict(label=item['label'],start=item['start_frame']/rate,end=item['end_frame']/rate)
+                      for item in current)
+    return blocks
+
+
+def chord_pitches(label):
+    """Map the chord vocabulary produced by MusicLab to root-position notes at C3."""
+    if label in ('N','unknown'): return ()
+    match=re.fullmatch(r'([A-G](?:#|b)?)([^/]*)(?:/[A-G](?:#|b)?)?',label)
+    if not match or match.group(1) not in ROOTS or match.group(2) not in CHORD_INTERVALS:
+        raise ValueError('Unsupported MusicLab chord label for MIDI export: '+label)
+    root=48+ROOTS[match.group(1)]
+    return tuple(root+interval for interval in CHORD_INTERVALS[match.group(2)])
 
 
 def build(events):
@@ -106,11 +162,28 @@ def build(events):
         for position, _, _, message in sorted(pending, key=lambda x:x[:3]):
             track.append(message.copy(time=position-last)); last = position
         summaries.append(dict(source_track=track_id, name=track.name, note_count=len(notes), channels=pools[track_id]))
+    chord_events=[]
+    chords=events.get('chords',[])
+    if chords:
+        track=mido.MidiTrack(); midi.tracks.append(track)
+        track.append(mido.MetaMessage('track_name',name='Chords'))
+        pending=[]
+        for item in chords:
+            start=tick(item['start']); end=max(start+1,tick(item['end'])); pitches=chord_pitches(item['label'])
+            pending.append((start,1,-1,mido.MetaMessage('marker',text=item['label'])))
+            for pitch in pitches:
+                pending.append((start,2,pitch,mido.Message('note_on',channel=CHORD_CHANNEL,note=pitch,velocity=CHORD_VELOCITY)))
+                pending.append((end,0,pitch,mido.Message('note_off',channel=CHORD_CHANNEL,note=pitch,velocity=0)))
+            chord_events.append(dict(tick=start,end_tick=end,time=item['start'],end=item['end'],
+                                     label=item['label'],pitches=pitches))
+        last=0
+        for position,_,_,message in sorted(pending,key=lambda item:item[:3]):
+            track.append(message.copy(time=position-last)); last=position
     buffer = io.BytesIO(); midi.save(file=buffer)
-    return buffer.getvalue(), expected, metadata, summaries, adjustments, seconds_per_tick
+    return buffer.getvalue(), expected, metadata, summaries, adjustments, seconds_per_tick, chord_events
 
 
-def verify(payload, expected, metadata, summaries, seconds_per_tick):
+def verify(payload, expected, metadata, summaries, seconds_per_tick, chord_events=None):
     """Read serialized bytes, pair actual messages, and reconstruct seconds.
 
     Called on every export before publishing, not just in the test suite.
@@ -119,9 +192,11 @@ def verify(payload, expected, metadata, summaries, seconds_per_tick):
     if payload[:4] != b'MThd':
         raise ValueError('MIDI header missing')
     midi = mido.MidiFile(file=io.BytesIO(payload))
-    if midi.type != 1 or midi.ticks_per_beat != PPQ or len(midi.tracks) != len(summaries)+1:
+    chord_events=chord_events or []
+    if midi.type != 1 or midi.ticks_per_beat != PPQ or len(midi.tracks) != len(summaries)+1+bool(chord_events):
         raise ValueError('MIDI format/PPQ/track count verification failed')
-    if [t.name for t in midi.tracks] != ['SheetSage Conductor']+[s['name'] for s in summaries]:
+    names=['SheetSage Conductor']+[s['name'] for s in summaries]+(['Chords'] if chord_events else [])
+    if [t.name for t in midi.tracks] != names:
         raise ValueError('MIDI track names verification failed')
     position = 0; actual_meta = []
     for msg in midi.tracks[0]:
@@ -136,7 +211,8 @@ def verify(payload, expected, metadata, summaries, seconds_per_tick):
         raise ValueError('Expected one global tempo at tick zero')
     actual_seconds_per_tick = tempo_messages[0][1]/1_000_000/midi.ticks_per_beat
     observed = []
-    for track_index, track in enumerate(midi.tracks[1:],1):
+    melodic_tracks=midi.tracks[1:1+len(summaries)]
+    for track_index, track in enumerate(melodic_tracks,1):
         position = 0; active = {}; ordered = []
         for msg in track:
             position += msg.time
@@ -156,6 +232,23 @@ def verify(payload, expected, metadata, summaries, seconds_per_tick):
         if active:
             raise ValueError('MIDI contains hanging notes')
         observed.extend(ordered)
+    if chord_events:
+        position=0; markers=[]; active={}; notes=[]
+        for msg in midi.tracks[-1]:
+            position+=msg.time
+            if msg.type=='marker': markers.append(dict(tick=position,label=msg.text))
+            elif msg.type=='note_on' and msg.velocity:
+                if msg.note in active: raise ValueError('Overlapping chord note')
+                active[msg.note]=position; notes.append(dict(start_tick=position,pitch=msg.note))
+            elif msg.type in ('note_on','note_off'):
+                if msg.note not in active: raise ValueError('Unmatched chord note off')
+                start=active.pop(msg.note)
+                next(note for note in reversed(notes) if note['pitch']==msg.note and note['start_tick']==start)['end_tick']=position
+        wanted_markers=[dict(tick=item['tick'],label=item['label']) for item in chord_events]
+        wanted_notes=[dict(start_tick=item['tick'],pitch=pitch,end_tick=item['end_tick'])
+                      for item in chord_events for pitch in item['pitches']]
+        if markers!=wanted_markers: raise ValueError('MIDI chord marker verification failed')
+        if active or notes!=wanted_notes: raise ValueError('MIDI chord note verification failed')
     if len(observed) != len(expected):
         raise ValueError('MIDI note count verification failed')
     start_errors, end_errors = [], []
@@ -177,19 +270,20 @@ def verify(payload, expected, metadata, summaries, seconds_per_tick):
                 note_count=len(observed))
 
 
-def export(evidence, root, path, *, overwrite=False):
+def export(evidence, root, path, *, overwrite=False, analysis=None):
     target = destination(path, root)
     if target.exists() and not overwrite:
         raise FileExistsError('MIDI file already exists; explicit overwrite confirmation is required')
     events = musical_events(evidence, root)
-    payload, expected, metadata, tracks, adjustments, tick_seconds = build(events)
-    measurements = verify(payload, expected, metadata, tracks, tick_seconds)
+    events['chords']=chord_blocks(analysis)
+    payload, expected, metadata, tracks, adjustments, tick_seconds, chords = build(events)
+    measurements = verify(payload, expected, metadata, tracks, tick_seconds, chords)
     handle, temporary = tempfile.mkstemp(prefix='.midi-export-', suffix='.tmp', dir=target.parent)
     try:
         with os.fdopen(handle,'wb') as stream:
             stream.write(payload); stream.flush(); os.fsync(stream.fileno())
         # Verify disk bytes too. Existing files stay intact if any check fails.
-        verify(Path(temporary).read_bytes(), expected, metadata, tracks, tick_seconds)
+        verify(Path(temporary).read_bytes(), expected, metadata, tracks, tick_seconds, chords)
         if overwrite:
             os.replace(temporary, target)
         else:
@@ -198,6 +292,8 @@ def export(evidence, root, path, *, overwrite=False):
         Path(temporary).unlink(missing_ok=True)
     return dict(exporter_version=VERSION, source='SheetSage2', exported_at=datetime.now(timezone.utc).isoformat(),
                 filename=target.name, ppq=PPQ, format=1, tracks=tracks, note_count=len(expected),
+                chord_event_type='marker', chord_event_count=len(chords),
+                chord_note_count=sum(len(item['pitches']) for item in chords),
                 bpm=events['bpm'], meters=events['meters'], keys=events['keys'],
                 source_sheet_sage_run=events['source_sheet_sage_run'], source_events_sha256=events['source_events_sha256'],
                 tempo_source=events['tempo_source'], meter_source=events['meter_source'], key_source=events['key_source'],

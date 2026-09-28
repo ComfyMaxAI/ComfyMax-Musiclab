@@ -21,6 +21,10 @@ from .theme import apply_theme
 from .music_panel import MusicPanel
 from .follow import follow_start
 from .transcript_panel import TranscriptPanel
+from .lyrics_panel import LyricsPanel
+from .settings_panel import SettingsPanel
+from .generation_panel import GenerationPanel
+from .audiocpp_runtime import AudioCppRuntime
 from .exporter import export_project,validate_scenes,ExportValidationError
 
 ROOT=Path(__file__).resolve().parents[3]
@@ -76,7 +80,7 @@ def separate_song(song,destination):
     return open_audio(run/'analysis.json',destination)
 
 
-class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
+class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, SettingsPanel, GenerationPanel):
     def __init__(self):
         super().__init__(); apply_theme(self); self.doc=None; self.transport=None; self.peaks={}; self.selected_marker=None
         self.dirty=False; self.busy=False; self.jobs=[]; self.history=QUndoStack(self)
@@ -126,7 +130,11 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
         self.views.addTab(splitter, 'Timeline')
         self.views.addTab(self.score_panel, 'Score')
         self.views.addTab(self.score_panel.abc, 'ABC')
+        self.build_generation(); self.views.addTab(self.generation_pane,'Music Generation')
+        self.build_settings(); self.views.addTab(self.settings_pane,'Settings')
         self.views.currentChanged.connect(self.change_notation_view)
+        self.audiocpp_runtime=AudioCppRuntime(self)
+        self.audiocpp_runtime.status_changed.connect(self.set_audiocpp_status)
         body.addWidget(self.views, 1)
         markers=QWidget(); ml=QVBoxLayout(markers); ml.setContentsMargins(4,4,4,4)
         edit=QHBoxLayout(); self.add_button=self.button(edit,'Place Marker at Playhead',self.add_at_playhead)
@@ -162,8 +170,9 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
         self.export_button.setToolTip('All scenes use Demucs vocals. Type is metadata only. Exact boundaries, no padding.'); sl.addLayout(bar)
         self.scene_table=self.table(['Scene','Start','End','Duration','Type','Warning']); sl.addWidget(self.scene_table,1)
         self.scene_table.cellDoubleClicked.connect(lambda *_:self.play_scene()); self.tabs.addTab(scenes,'Scenes')
-        optional=QHBoxLayout(); self.transcript_toggle=QCheckBox('Show transcript (optional listening aid)'); self.transcript_toggle.toggled.connect(self.show_transcript); optional.addWidget(self.transcript_toggle); optional.addStretch(); body.addLayout(optional)
+        self.build_lyrics_editor(); self.tabs.addTab(self.lyrics_pane,'Lyrics')
         self.build_transcript()
+        self.tabs.addTab(self.transcript_pane,'Transcript aid')
         self.build_music(header)
         self.progress=QProgressBar(); self.progress.setRange(0,0); self.progress.hide(); layout.addWidget(self.progress)
         self.status=QLabel('Load a song for local Demucs separation, or open an existing project.'); self.status.setWordWrap(True); layout.addWidget(self.status)
@@ -182,6 +191,9 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
             self.score_panel.show_score()
         elif index == 2:
             self.score_panel.load_source()
+        elif self.views.widget(index) is self.generation_pane:
+            self.refresh_generation_inputs()
+            self.audiocpp_runtime.ensure_started()
 
     @staticmethod
     def table(labels):
@@ -260,7 +272,7 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
             wave.set_view(self.doc.data['view'].get('start',0),self.doc.data['view'].get('span',30))
         self.title.setText(self.doc.data['title']); self.setWindowTitle('ComfyMax MusicLab — '+self.doc.data['title'])
         self.refresh_transcript()
-        self.sync_navigation(); self.tabs.setCurrentIndex(0); self.refresh(); self.refresh_music(); self.set_busy(False)
+        self.sync_navigation(); self.tabs.setCurrentIndex(0); self.refresh(); self.refresh_music(); self.reset_generation_inputs(); self.set_busy(False)
         self.autosave.stop(); self.dirty=False
         self.status.setText('Recovered saved project. Save to retain it.' if self.doc.recovered else 'Ready. Markers alone define scene boundaries; press Create Scenes when ready.')
 
@@ -399,11 +411,6 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
         rows=created_scenes(self.state,self.transport.rate); i=self.scene_table.currentRow()
         if 0<=i<len(rows): self.play_range(rows[i]['start_frame'],rows[i]['end_frame'])
 
-    def show_transcript(self,visible):
-        index=self.tabs.indexOf(self.transcript_pane)
-        if visible and index<0: self.tabs.addTab(self.transcript_pane,'Transcript aid')
-        elif not visible and index>=0: self.tabs.removeTab(index)
-
     def play_transcript(self,row,column=0):
         if column==2 or not self.transcript_draft: return
         p=self.transcript_draft['lyrics']['segments'][row]
@@ -502,7 +509,10 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel):
         return self.save(True)
     def closeEvent(self,event):
         if self.busy: QMessageBox.information(self,'Working','Please wait for audio preparation or saving to finish.'); event.ignore(); return
+        if not self.resolve_lyrics_editor_changes(): event.ignore(); return
         if not self.prepare_leave(): event.ignore(); return
+        self._cleanup_generation_preview()
+        self.audiocpp_runtime.stop()
         self.score_panel.close_renderer()
         if self.transport: self.transport.close()
         if self.doc: self.doc.close()

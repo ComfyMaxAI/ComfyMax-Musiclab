@@ -7,7 +7,7 @@ from pathlib import Path
 import uuid
 
 SCHEMA = 'comfymax.transcript.1'
-MODEL = 'small'
+MODEL = 'medium'
 LANGUAGES = (('Auto',None),('Spanish','es'),('English','en'),('Dutch','nl'),('French','fr'),('German','de'))
 EVIDENCE_FIELDS = ('avg_logprob','no_speech_prob','compression_ratio','temperature')
 # Review heuristics, not calibrated confidence. No filtering or text modification.

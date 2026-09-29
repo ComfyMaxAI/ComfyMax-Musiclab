@@ -11,7 +11,8 @@ os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from PySide6.QtGui import QTextCursor
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication,QGroupBox,QLabel,QPlainTextEdit,QPushButton,QSlider,QSpinBox,QTabBar
+from PySide6.QtWidgets import (QApplication,QFileDialog,QGroupBox,QLabel,QMessageBox,QPlainTextEdit,
+                               QPushButton,QSlider,QSpinBox,QTabBar)
 
 from comfymax_audio_chunker.editor.generation_panel import (GenerationPanel,GpuQueryTask,STYLE_PRESETS,
                                                             parse_nvidia_smi)
@@ -102,6 +103,33 @@ class GenerationPanelTests(unittest.TestCase):
         h.lyrics_editor.setPlainText('changed original'); h.score_panel.source=Source('new original ABC'); h.refresh_generation_inputs()
         self.assertEqual(h.generation_lyrics.toPlainText(),'generation lyrics')
         self.assertEqual(h.generation_abc.toPlainText(),'edited ABC')
+
+    def test_project_lyrics_save_and_direct_load_utf8(self):
+        h=self.host; root=Path(self.temp.name)/'Cuando Sali De Cuba.comfymax'; root.mkdir()
+        h.doc=SimpleNamespace(root=root,data={'title':'Cuando Sali De Cuba'})
+        text='[intro]\nMañana\n[verse1]\n[chorus]\n[instrumental]\n[outro]\n'
+        h.generation_lyrics.setPlainText(text); h.save_generation_lyrics()
+        target=root/'Cuando Sali De Cuba_lyrics.txt'
+        self.assertEqual(target.read_text(encoding='utf-8'),text)
+        h.generation_lyrics.clear()
+        with patch.object(QFileDialog,'getOpenFileName',side_effect=AssertionError('project file must load directly')):
+            h.load_generation_lyrics()
+        self.assertEqual(h.generation_lyrics.toPlainText(),text)
+
+    def test_project_lyrics_overwrite_confirmation_and_import_fallback(self):
+        h=self.host; root=Path(self.temp.name)/'Project.comfymax'; root.mkdir()
+        h.doc=SimpleNamespace(root=root,data={'title':'Project'})
+        target=root/'Project_lyrics.txt'; target.write_text('old',encoding='utf-8')
+        h.generation_lyrics.setPlainText('new')
+        with patch.object(QMessageBox,'question',return_value=QMessageBox.No): h.save_generation_lyrics()
+        self.assertEqual(target.read_text(encoding='utf-8'),'old')
+        with patch.object(QMessageBox,'question',return_value=QMessageBox.Yes): h.save_generation_lyrics()
+        self.assertEqual(target.read_text(encoding='utf-8'),'new')
+        target.unlink(); imported=root.parent/'external.txt'; imported.write_text('[verse1]\nExtern',encoding='utf-8')
+        with patch.object(QFileDialog,'getOpenFileName',return_value=(str(imported),'Text files (*.txt)')):
+            h.load_generation_lyrics()
+        self.assertEqual(h.generation_lyrics.toPlainText(),'[verse1]\nExtern')
+        self.assertFalse(target.exists())
 
     def test_abc_unavailable_defaults_checkbox_off(self):
         self.host.score_panel.source=Source(''); self.host.refresh_generation_inputs()

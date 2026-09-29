@@ -79,13 +79,18 @@ class MusicOverlay:
             self._key = None
             self.rows = []; self.bars = []; self.pixmap = None
             return
+        # music_analysis is intentionally updated in place by parts of the UI.
+        # Include the saved downbeat geometry so a pixmap cached before those
+        # results arrived cannot hide the bars indefinitely.
+        bars = downbeat_bars(data)
         key = (self.source, wave.visible_window(), wave.width(), wave.height(),
-               wave.devicePixelRatioF(), wave.font().toString(), wave.overview, top, bottom)
+               wave.devicePixelRatioF(), wave.font().toString(), wave.overview, top, bottom,
+               tuple(bars))
         if self._data is not data or self._key != key:
             self._data = data
             self._key = key
             self.rows = chord_rows(data, self.source)
-            self.bars = downbeat_bars(data)
+            self.bars = bars
             dpr = wave.devicePixelRatioF()
             self.pixmap = QPixmap(math.ceil(wave.width()*dpr), math.ceil(wave.height()*dpr))
             self.pixmap.setDevicePixelRatio(dpr)
@@ -128,7 +133,9 @@ class MusicOverlay:
                 if not a <= seconds <= a+span:
                     continue
                 x = wave.x(seconds)
-                p.setPen(QPen(QColor('#ba9cf5'), 1, Qt.DashLine))
+                # Preserve the original purple dashed style, but use two device
+                # pixels so fractional x positions remain visible over peaks.
+                p.setPen(QPen(QColor('#ba9cf5'), 2, Qt.DashLine))
                 end_y = bottom if wave.overview else bottom+LANE_HEIGHT
                 p.drawLine(QPointF(x, top), QPointF(x, end_y))
                 text = str(number)

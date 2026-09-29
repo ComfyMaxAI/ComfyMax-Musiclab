@@ -1,21 +1,42 @@
 """Optional process boundary. No neural/legacy dependencies enter the editor."""
 import json
+import hashlib
 import logging
 import math
 import os
 from pathlib import Path, PureWindowsPath
 import subprocess
 import tempfile
+import sys
 
 import numpy as np
 import soundfile as sf
 
 PROTOCOL = 'comfymax.rhythm.1'
 CONFIG = Path(__file__).resolve().parents[3] / '.cache' / 'rhythm-backend.json'
+ROOT = Path(__file__).resolve().parents[3]
+MANAGED_MODEL = ROOT / 'engines' / 'beat-transformer' / 'model'
+MANAGED_CHECKPOINT = MANAGED_MODEL / 'checkpoint' / 'fold_4_trf_param.pt'
+WORKER = Path(__file__).with_name('beat_worker.py')
+MANAGED_FILES = {
+    MANAGED_CHECKPOINT: 'b76033014dd07d12307743b92337b7dffadf1f20a6ccd5a1edb03276e99a4512',
+    MANAGED_MODEL / 'code' / 'DilatedTransformer.py': '54f8e13f93ff02f5070ff11095929264157275ab9975f06b233a373539873ec8',
+    MANAGED_MODEL / 'code' / 'DilatedTransformerLayer.py': '87bdb9e11da791378c2aaa8ade815e6ea9eec2155dd700402b6561dbb8e2330b',
+}
 
 
 class BackendUnavailable(RuntimeError):
     """Expected external configuration, process, or response failure."""
+
+
+def validate_managed_runtime():
+    """Fail clearly if a bundled model file is missing or was corrupted."""
+    for path, expected in MANAGED_FILES.items():
+        if not path.is_file():
+            raise BackendUnavailable(f'MusicLab Beat-Transformer file is missing: {path}')
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            raise BackendUnavailable(f'MusicLab Beat-Transformer checksum mismatch: {path}')
 
 
 def configuration():
@@ -23,14 +44,22 @@ def configuration():
     if not path.exists():
         if 'COMFYMAX_RHYTHM_CONFIG' in os.environ:
             raise BackendUnavailable(f'Rhythm configuration not found: {path}')
-        return {'backend': 'librosa'}
-    try:
-        value = json.loads(path.read_text(encoding='utf-8-sig'))
-    except (OSError, ValueError) as exc:
-        raise BackendUnavailable(f'Cannot read rhythm configuration: {exc}') from exc
+        value = {'backend': 'beat-transformer'}
+    else:
+        try:
+            value = json.loads(path.read_text(encoding='utf-8-sig'))
+        except (OSError, ValueError) as exc:
+            raise BackendUnavailable(f'Cannot read rhythm configuration: {exc}') from exc
     if not isinstance(value, dict) or value.get('backend') not in ('librosa', 'beat-transformer'):
         raise BackendUnavailable('Configuration requires backend librosa or beat-transformer.')
-    return value
+    if value['backend'] == 'librosa':
+        return {'backend': 'librosa'}
+    # Beat-Transformer is a MusicLab-managed component.  Deliberately discard
+    # legacy machine-specific command/model fields (including WSL paths).
+    validate_managed_runtime()
+    return dict(backend='beat-transformer', command=[sys.executable, str(WORKER)],
+                path_style='native', model_root=str(MANAGED_MODEL),
+                checkpoint=str(MANAGED_CHECKPOINT), timeout_seconds=1200)
 
 
 def worker_path(path, style):

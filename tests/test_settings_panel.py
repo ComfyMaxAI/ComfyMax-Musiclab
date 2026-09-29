@@ -113,6 +113,8 @@ class SettingsPanelTests(unittest.TestCase):
         self.addCleanup(window.deleteLater)
         self.assertIn('Settings',[window.views.tabText(i) for i in range(window.views.count())])
         self.assertIs(window.views.widget(window.views.indexOf(window.settings_pane)),window.settings_pane)
+        tabs=[window.views.tabText(i) for i in range(window.views.count())]
+        self.assertEqual(tabs.index('Style Presets'),tabs.index('Settings')+1)
 
 
 if __name__=='__main__': unittest.main()

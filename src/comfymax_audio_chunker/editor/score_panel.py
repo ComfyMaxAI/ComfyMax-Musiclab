@@ -42,10 +42,30 @@ class ScorePanel(QWidget):
             button = QPushButton(f'+{amount}'); button.clicked.connect(lambda checked=False, n=amount: self.transpose(n)); transpose_bar.addWidget(button)
         self.transpose_label = QLabel('Transpose: Original'); transpose_bar.addWidget(self.transpose_label)
         preview = QPushButton('Update Preview'); preview.clicked.connect(self.preview_working); transpose_bar.addWidget(preview)
+        self.vocal_editor_button = QPushButton('Edit Vocal Notes')
+        self.vocal_editor_button.clicked.connect(self.edit_vocal_notes); transpose_bar.addWidget(self.vocal_editor_button)
         transpose_bar.addStretch(); abc_layout.addLayout(transpose_bar)
         self.abc = QPlainTextEdit()
         self.abc.setPlaceholderText('No SheetSage score available.')
         abc_layout.addWidget(self.abc, 1)
+
+    def edit_vocal_notes(self):
+        document = self.working_document()
+        if not document or document.error:
+            self.status.setText(document.error if document else 'No SheetSage score available.')
+            return
+        from .vocal_note_editor import VocalNoteEditor
+        try:
+            dialog = VocalNoteEditor(self.abc.toPlainText(), self)
+        except ValueError as exc:
+            self.status.setText('Vocal Note Editor: ' + str(exc))
+            return
+        if dialog.exec() != dialog.Accepted or dialog.result_abc is None:
+            return
+        text = dialog.result_abc
+        self.document = ScoreDocument(text.encode('utf-8'), 'Working ABC')
+        self.abc.blockSignals(True); self.abc.setPlainText(text); self.abc.blockSignals(False)
+        self.preview_working()
 
     def set_project(self, doc):
         self.source = (SheetSageABCSource(doc.root, doc.data.get('music_analysis', {}).get('sheet_sage'))

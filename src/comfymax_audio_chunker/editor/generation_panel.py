@@ -13,43 +13,11 @@ from PySide6.QtWidgets import (QCheckBox,QComboBox,QDoubleSpinBox,QFormLayout,QG
                                QPushButton,QScrollArea,QSlider,QSpinBox,QSplitter,QVBoxLayout,QWidget)
 from .lyrics_panel import insert_section
 from .settings_panel import load_settings,save_settings
+from .style_presets import DEFAULT_STYLE_PRESETS,StylePresetStore
 
 
 LOG=logging.getLogger(__name__)
-STYLE_PRESETS={
-    'Pop':'Modern pop, catchy hooks, bright synths, punchy drums, polished production, expressive lead vocals',
-    'Rock':'Energetic rock, distorted electric guitars, driving bass and drums, powerful lead vocals',
-    'Soft Rock':'Soft rock, clean electric guitars, warm piano, steady drums, smooth emotive vocals',
-    'Indie Pop':'Indie pop, bright guitars, melodic bass, crisp drums, warm intimate vocals, polished demo mix',
-    'Indie Rock':'Indie rock, jangly guitars, driving live drums, textured bass, earnest lead vocals',
-    'Acoustic':'Acoustic singer-songwriter, fingerpicked guitar, light percussion, intimate natural vocals',
-    'Folk':'Contemporary folk, acoustic guitar, fiddle and mandolin, organic rhythm, warm storytelling vocals',
-    'Country':'Modern country, acoustic guitar, pedal steel, steady drums, clear heartfelt vocals',
-    'Blues':'Electric blues, expressive guitar, shuffle groove, Hammond organ, soulful gritty vocals',
-    'Soul':'Classic soul, warm Rhodes, brass accents, deep bass groove, passionate lead vocals',
-    'R&B':'Contemporary R&B, smooth keys, deep bass, crisp restrained beats, silky expressive vocals',
-    'Funk':'Funk, syncopated bass, wah guitar, tight drums, brass stabs, energetic vocals',
-    'Disco':'Disco, four-on-the-floor groove, octave bass, strings, rhythmic guitar, glamorous vocals',
-    'Jazz':'Modern jazz, piano trio, walking bass, brushed drums, rich harmony, relaxed vocal phrasing',
-    'Swing':'Big band swing, brass and saxophones, walking bass, swinging drums, lively crooner vocals',
-    'Reggae':'Roots reggae, offbeat guitar, deep bass, relaxed drums, warm laid-back vocals',
-    'Ska':'Upbeat ska, offbeat guitar, punchy brass, walking bass, fast drums, spirited vocals',
-    'Latin Pop':'Latin pop, bright guitars, syncopated percussion, modern pop beat, passionate vocals',
-    'Salsa':'Salsa, piano montuno, brass section, congas and timbales, energetic call-and-response vocals',
-    'Bachata':'Bachata, bright requinto guitar, syncopated bass, bongos, romantic intimate vocals',
-    'Spanish Rumba':'Spanish rumba, lively rhythmic groove, Spanish guitar, hand percussion, lush strings, warm male vocals',
-    'Flamenco':'Flamenco, virtuosic Spanish guitar, hand claps, cajón, dramatic passionate vocals',
-    'Bossa Nova':'Bossa nova, nylon-string guitar, soft brushed drums, gentle bass, intimate airy vocals',
-    'EDM':'Festival EDM, massive synth leads, driving kick, dramatic builds and drops, polished production',
-    'House':'House, four-on-the-floor beat, deep bass, rhythmic piano chords, soulful vocal hooks',
-    'Dance Pop':'Dance pop, bright synths, pulsing bass, energetic beat, catchy polished vocals',
-    'Synthwave':'Synthwave, retro analog synths, gated drums, pulsing arpeggios, cinematic neon atmosphere',
-    'Hip-Hop':'Modern hip-hop, heavy drums, deep bass, atmospheric samples, confident rhythmic vocals',
-    'Trap':'Trap, booming 808 bass, rapid hi-hats, dark synth textures, melodic rap vocals',
-    'Ballad':'Emotional ballad, piano and strings, gentle build, spacious production, heartfelt lead vocals',
-    'Cinematic':'Cinematic, sweeping strings, deep percussion, evolving orchestral textures, dramatic atmosphere',
-    'Orchestral':'Orchestral, full symphony orchestra, rich strings and brass, dynamic percussion, grand arrangement',
-}
+STYLE_PRESETS=DEFAULT_STYLE_PRESETS
 
 
 class GenerationTask(QThread):
@@ -85,6 +53,11 @@ class GpuQueryTask(QThread):
 
 class GenerationPanel:
     def build_generation(self):
+        if not hasattr(self,'style_preset_store'):
+            path=getattr(self,'style_presets_path',None)
+            if path is None and getattr(self,'generation_settings_path',None) is not None:
+                path=Path(self.generation_settings_path).with_name('style-presets.json')
+            self.style_preset_store=StylePresetStore(path)
         stored=load_settings(getattr(self,'generation_settings_path',None))
         stored.update(getattr(self,'model_settings',{})); self.model_settings=stored
         self.generation_pane=QWidget(); layout=QVBoxLayout(self.generation_pane)
@@ -97,7 +70,13 @@ class GenerationPanel:
 
         self.generation_model=QLabel('Model: Not configured'); controls.addWidget(self.generation_model)
         self.audiocpp_status=QLabel('audio.cpp: Not available'); controls.addWidget(self.audiocpp_status)
-        controls.addWidget(QLabel('Lyrics'))
+        lyrics_header=QHBoxLayout(); lyrics_header.addWidget(QLabel('Lyrics')); lyrics_header.addStretch()
+        self.generation_load_lyrics=QPushButton('Load Lyrics')
+        self.generation_load_lyrics.clicked.connect(self.load_generation_lyrics)
+        lyrics_header.addWidget(self.generation_load_lyrics)
+        self.generation_save_lyrics=QPushButton('Save Lyrics')
+        self.generation_save_lyrics.clicked.connect(self.save_generation_lyrics)
+        lyrics_header.addWidget(self.generation_save_lyrics); controls.addLayout(lyrics_header)
         sections=QHBoxLayout()
         for name in ('Intro','Verse','Chorus','Pre-Chorus','Bridge','Instrumental','Solo','Outro'):
             button=QPushButton(name); button.clicked.connect(lambda checked=False,n=name:insert_section(self.generation_lyrics,n)); sections.addWidget(button)
@@ -107,8 +86,9 @@ class GenerationPanel:
         form=QFormLayout(); controls.addLayout(form)
         self.generation_style=QLineEdit(); self.generation_style.setPlaceholderText('English indie pop, bright acoustic guitar, warm lead vocal, polished demo mix')
         form.addRow('Style:',self.generation_style)
-        self.generation_style_preset=QComboBox(); self.generation_style_preset.addItem('Custom')
-        self.generation_style_preset.addItems(STYLE_PRESETS)
+        self.generation_style_preset=QComboBox()
+        self.refresh_generation_style_presets()
+        self.style_preset_store.changed.connect(self.refresh_generation_style_presets)
         self._applying_style_preset=False
         self.generation_style_preset.currentTextChanged.connect(self.apply_style_preset)
         self.generation_style.textEdited.connect(self.style_manually_edited)
@@ -202,6 +182,43 @@ class GenerationPanel:
     def _generation_edited(self,kind):
         setattr(self,f'generation_{kind}_dirty',True)
 
+    def _generation_lyrics_path(self):
+        doc=getattr(self,'doc',None)
+        if doc is None: return None
+        return Path(doc.root)/(str(doc.data['title'])+'_lyrics.txt')
+
+    def save_generation_lyrics(self):
+        path=self._generation_lyrics_path()
+        if path is None:
+            QMessageBox.information(self.generation_pane,'Save Lyrics','Open a MusicLab project first.')
+            return
+        if path.exists() and QMessageBox.question(self.generation_pane,'Replace lyrics?',
+                f'Replace the existing project lyrics?\n{path.name}',QMessageBox.Yes|QMessageBox.No,
+                QMessageBox.No)!=QMessageBox.Yes:
+            return
+        try:
+            path.write_text(self.generation_lyrics.toPlainText(),encoding='utf-8')
+            self.generation_output_status.setText('Saved project lyrics: '+path.name)
+        except OSError as exc:
+            QMessageBox.warning(self.generation_pane,'Save Lyrics failed',str(exc))
+
+    def load_generation_lyrics(self):
+        path=self._generation_lyrics_path()
+        if path is None:
+            QMessageBox.information(self.generation_pane,'Load Lyrics','Open a MusicLab project first.')
+            return
+        if not path.exists():
+            name,_=QFileDialog.getOpenFileName(self.generation_pane,'Load Lyrics',str(path.parent),
+                                               'Text files (*.txt);;All files (*)')
+            if not name: return
+            path=Path(name)
+        try:
+            text=path.read_text(encoding='utf-8')
+        except (OSError,UnicodeError) as exc:
+            QMessageBox.warning(self.generation_pane,'Load Lyrics failed',str(exc)); return
+        self.generation_lyrics.setPlainText(text)
+        self.generation_output_status.setText('Loaded lyrics: '+path.name)
+
     def randomize_generation_seed(self):
         self.generation_seed.setValue(secrets.randbelow(2_147_483_648))
 
@@ -214,11 +231,23 @@ class GenerationPanel:
 
     def apply_style_preset(self,name):
         if name=='Custom': return
+        prompt=self.style_preset_store.prompt(name)
+        if prompt is None:
+            self.refresh_generation_style_presets(); return
         self._applying_style_preset=True
         try:
-            prompt=STYLE_PRESETS[name]; self.generation_style.setText(prompt)
+            self.generation_style.setText(prompt)
             self.generation_style.setCursorPosition(len(prompt))
         finally: self._applying_style_preset=False
+
+    def refresh_generation_style_presets(self):
+        current=self.generation_style_preset.currentText() if hasattr(self,'generation_style_preset') else 'Custom'
+        if not hasattr(self,'generation_style_preset'): return
+        self.generation_style_preset.blockSignals(True); self.generation_style_preset.clear()
+        self.generation_style_preset.addItem('Custom'); self.generation_style_preset.addItems(self.style_preset_store.names())
+        self.generation_style_preset.setCurrentText(current if current in self.style_preset_store.names() else 'Custom')
+        self.generation_style_preset.blockSignals(False)
+        if current!='Custom' and current in self.style_preset_store.names(): self.apply_style_preset(current)
 
     def style_manually_edited(self,_text):
         if self._applying_style_preset or self.generation_style_preset.currentText()=='Custom': return

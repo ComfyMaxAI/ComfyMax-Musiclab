@@ -25,9 +25,6 @@ def run(request):
     np.int = int
     import librosa
     import torch
-    import madmom
-    from madmom.features.beats import DBNBeatTrackingProcessor
-    from madmom.features.downbeats import DBNDownBeatTrackingProcessor
     from scipy import signal
 
     root = Path(request['model_root'])
@@ -72,28 +69,40 @@ def run(request):
     fps = 44100 / 1024
     beat = activation[:, 0]
     down = activation[:, 1]
-    options = dict(min_bpm=55., max_bpm=215., fps=fps, transition_lambda=100,
-                   observation_lambda=6, num_tempi=None, threshold=.2)
-    beats = DBNBeatTrackingProcessor(**options)(beat)
-    combined = np.column_stack([np.maximum(beat-down, 0), down])
-    # Ensure a valid categorical observation even for independently trained logits.
-    combined /= np.maximum(1, combined.sum(axis=1, keepdims=True))
-    decoded = DBNDownBeatTrackingProcessor(beats_per_bar=[3, 4], **options)(combined)
+    # Decode the model activations with MusicLab's installed librosa runtime.
+    # This keeps the neural model/checkpoint unchanged while avoiding the old
+    # madmom Python 3.10/WSL environment owned by another application.
+    _, beat_frames = librosa.beat.beat_track(onset_envelope=beat, sr=44100,
+        hop_length=1024, bpm=None, start_bpm=120., tightness=100., trim=False,
+        sparse=True)
+    beat_frames = np.asarray(beat_frames, dtype=int)
+    beats = librosa.frames_to_time(beat_frames, sr=44100, hop_length=1024)
+    # Downbeats come only from local maxima in the model's downbeat output.
+    # Do not synthesize a bar grid by selecting every third/fourth beat.
+    down_frames, properties = signal.find_peaks(down, height=.2, prominence=.03,
+        distance=max(1, int(fps * 60 / 215 * 2)))
+    downbeats = librosa.frames_to_time(down_frames, sr=44100, hop_length=1024)
+    strengths = properties.get('peak_heights', np.array([], dtype=float))
+    strength = float(np.median(strengths)) if len(strengths) else 0.
     duration = len(audio)/44100
     beats = beats[(beats >= 0) & (beats < duration)]
-    if len(decoded):
-        decoded = decoded[(decoded[:, 0] >= 0) & (decoded[:, 0] < duration)]
-    downbeats = decoded[decoded[:, 1] == 1, 0] if len(decoded) else np.array([])
-    indexes = np.minimum(np.rint(downbeats * fps).astype(int), len(down)-1)
-    strength = float(np.median(down[indexes])) if len(indexes) else 0.
+    downbeats = downbeats[(downbeats >= 0) & (downbeats < duration)]
     # No probability claim: this is an explicit conservative activation gate.
     reliable = len(downbeats) >= 3 and strength >= .2
     meter = None
     if reliable:
-        starts = np.flatnonzero(decoded[:, 1] == 1)
-        counts = np.diff(starts)
-        if len(counts) >= 2 and np.all(counts == counts[0]) and counts[0] in (3, 4):
-            meter = dict(numerator=int(counts[0]), denominator=4)
+        # Meter metadata is accepted only when independently detected downbeat
+        # peaks consistently span three or four decoded beats.
+        nearest = np.searchsorted(beats, downbeats)
+        nearest = np.clip(nearest, 0, max(0, len(beats)-1))
+        if len(beats):
+            left = np.maximum(nearest-1, 0)
+            nearest = np.where(np.abs(beats[left]-downbeats) < np.abs(beats[nearest]-downbeats), left, nearest)
+        counts = np.diff(nearest)
+        if len(counts) >= 2:
+            candidate = int(round(float(np.median(counts))))
+            if candidate in (3, 4) and np.mean(counts == candidate) >= .75:
+                meter = dict(numerator=candidate, denominator=4)
     return dict(protocol=PROTOCOL, success=True, beats=beats.tolist(),
         downbeats=downbeats.tolist(), bpm=float(60/np.median(np.diff(beats))) if len(beats)>1 else None,
         beat_unit='1/4', meter=meter, meter_reliable=meter is not None,
@@ -102,7 +111,7 @@ def run(request):
         checkpoint_sha256=hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
         architecture_sha256=hashlib.sha256((root/'code'/'DilatedTransformer.py').read_bytes()).hexdigest(),
         torch=torch.__version__, librosa=librosa.__version__, numpy=np.__version__,
-        madmom=madmom.__version__, device='cpu', preprocessing='hpss-five-view-v1 (not demixed stems)',
+        decoder='musiclab-model-peak-v1', device='cpu', preprocessing='hpss-five-view-v1 (not demixed stems)',
         fps=fps, decoded_meter_candidates=[3,4], downbeat_median_activation=strength,
         reliability_threshold=.2, decoded_downbeat_count=len(downbeats),
         chunk_core_frames=3000, chunk_context_frames=1024))

@@ -157,6 +157,8 @@ echo [8/9] Running installation self-check...
 if errorlevel 1 goto :INSTALL_FAILED
 "%VENV_PYTHON%" -c "from comfymax_audio_chunker.music import sheetsage_setup; print('[OK] SheetSage integration')"
 if errorlevel 1 goto :INSTALL_FAILED
+"%VENV_PYTHON%" -c "from comfymax_audio_chunker.music.beat_backend import configuration, validate_managed_runtime; validate_managed_runtime(); c=configuration(); assert c['backend']=='beat-transformer'; assert c['command'][0].lower().startswith(r'%ROOT%.venv'.lower()); print('[OK] MusicLab-managed Beat-Transformer runtime')"
+if errorlevel 1 goto :INSTALL_FAILED
 "%VENV_PYTHON%" -m pip check
 if errorlevel 1 goto :INSTALL_FAILED
 echo [OK] Python

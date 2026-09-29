@@ -138,7 +138,7 @@ def analyze_rhythm(y, settings, rate, total, *, source_audio=None, config=None,
     return dict(beats=beats, tempo=estimate_tempo(bpm, [b['seconds'] for b in beats], settings),
                 meter=dict(numerator=4, denominator=4, source='default'),
                 first_downbeat=dict(beat_id=None, source='default'),
-                warnings=[f'Beat-Transformer unavailable; using librosa: {reason}'] if reason else [],
+                warnings=[f'Beat-Transformer unavailable – using librosa fallback (downbeats unavailable): {reason}'] if reason else [],
                 provenance=dict(requested_backend=requested, selected_backend='librosa',
                                 fallback_reason=reason))
 

@@ -57,6 +57,52 @@ class MusicOverlayTests(unittest.TestCase):
         self.data['analysis']['rhythm_backend']['detected_downbeats'] += [dict(frame=-1), dict(frame=3599093)]
         self.assertEqual(downbeat_bars(self.data), [(3.599093, 1), (5.599093, 2)])
 
+    def test_downbeat_bars_render_at_exact_timestamps_and_refresh_in_place(self):
+        detected=self.data['analysis']['rhythm_backend']['detected_downbeats']
+        detected.clear(); first=self.render()
+        self.assertEqual(self.wave.music_overlay.bars,[])
+        detected.extend([dict(frame=2000000),dict(frame=6000000)])
+        image=self.render()
+        self.assertEqual(self.wave.music_overlay.bars,[(2,1),(6,2)])
+        for seconds in (2,6):
+            x=round(self.wave.x(seconds))
+            purple=sum(1 for y in range(23,self.wave.height()-35)
+                       if image.pixelColor(x,y).blue()>180 and image.pixelColor(x,y).red()>120)
+            self.assertGreater(purple,5)
+        self.assertNotEqual(first,image)
+
+    def test_analysis_without_downbeats_renders_chords_without_error(self):
+        self.data['analysis']['rhythm_backend']['detected_downbeats']=[]
+        self.data['bars']=[]
+        image=self.render()
+        self.assertEqual(self.wave.music_overlay.bars,[])
+        self.assertEqual(self.wave.music_overlay.rows[0][2],'C')
+        self.assertFalse(image.isNull())
+
+    def test_actual_marker_editor_timeline_renders_downbeats_over_waveform(self):
+        from comfymax_audio_chunker.editor.marker_app import MarkerEditor
+        window=MarkerEditor()
+        try:
+            data=analysis(); data['timeline']['frames']=12000000
+            data['analysis']['rhythm_backend']['detected_downbeats']=[
+                dict(frame=2000000),dict(frame=6000000),dict(frame=10000000)]
+            wave=window.detail; wave.resize(1216,300)
+            wave.doc=SimpleNamespace(duration=12.,data=dict(timeline=data['timeline'],music_analysis=data))
+            wave.peaks=(np.zeros(1200),np.ones(1200)*.3,.01); wave.markers=[4000000]
+            wave.set_view(0,12); image=wave.grab().toImage()
+            self.assertEqual(wave.music_overlay.bars,[(2,1),(6,2),(10,3)])
+            # Inspect the final composited MarkerEditor Timeline image, in the
+            # waveform area well above the Chords lane.
+            for seconds in (2,6,10):
+                x=round(wave.x(seconds))
+                purple=sum(1 for px in range(x-1,x+2) for y in range(35,140)
+                           if image.pixelColor(px,y).blue()>180 and image.pixelColor(px,y).red()>120)
+                self.assertGreater(purple,4)
+            self.assertEqual(wave.markers,[4000000])
+            self.assertEqual(wave.music_overlay.rows[0][2],'C')
+        finally:
+            window.close()
+
     def test_final_canonical_regions(self):
         self.assertEqual(chord_rows(self.data, 'Final'), [(0, 3.645533, 'C'), (3.645533, 10, 'Am')])
 

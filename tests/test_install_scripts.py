@@ -50,11 +50,25 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn(name,runtime)
         for package in ('comfymax_audio_chunker','PySide6','faster_whisper','mido','sounddevice','soundfile','librosa','demucs'):
             self.assertIn(package,script)
+        self.assertIn('MusicLab-managed Beat-Transformer runtime', script)
+        self.assertIn('validate_managed_runtime()', script)
+
+    def test_beat_transformer_assets_are_bundled_and_not_external(self):
+        model = ROOT/'engines'/'beat-transformer'/'model'
+        self.assertTrue((model/'code'/'DilatedTransformer.py').is_file())
+        self.assertTrue((model/'code'/'DilatedTransformerLayer.py').is_file())
+        self.assertTrue((model/'checkpoint'/'fold_4_trf_param.pt').is_file())
+        self.assertTrue((ROOT/'engines'/'beat-transformer'/'LICENSE').is_file())
+        backend=(ROOT/'src'/'comfymax_audio_chunker'/'music'/'beat_backend.py').read_text(encoding='utf-8')
+        worker=(ROOT/'src'/'comfymax_audio_chunker'/'music'/'beat_worker.py').read_text(encoding='utf-8')
+        for legacy_name in ('Chord'+'MiniApp', 'ComfyMax-'+'Audio-Chunker'):
+            self.assertNotIn(legacy_name, backend+worker)
+        self.assertNotIn('import madmom', worker)
 
     def test_sheetsage_runtime_install_follows_venv_and_never_requires_prebundled_manifest(self):
         script=(ROOT/'Install.bat').read_text(encoding='utf-8')
-        self.assertLess(script.index('[4/8] Installing Python environment'),
-                        script.index('[6/8] Installing or validating SheetSage runtime'))
+        self.assertLess(script.index('[4/9] Installing Python environment'),
+                        script.index('[6/9] Installing or validating SheetSage runtime'))
         self.assertIn('[INFO] Installing SheetSage runtime...',script)
         self.assertIn('[OK] SheetSage runtime',script)
         self.assertIn('validate_runtime',script)

@@ -82,6 +82,7 @@ class RhythmBackendTests(unittest.TestCase):
         with patch.object(beat_backend,'infer',side_effect=beat_backend.BackendUnavailable('missing model')), patch.object(rhythm,'analyze',return_value=(None,[])):
             data=rhythm.analyze_rhythm(self.audio,Settings(),self.rate,len(self.audio),config=self.config)
         self.assertIn('missing model',data['warnings'][0])
+        self.assertIn('librosa fallback (downbeats unavailable)',data['warnings'][0])
 
     def test_internal_programming_errors_not_swallowed(self):
         with patch.object(beat_backend,'infer',side_effect=TypeError('internal bug')):
@@ -102,6 +103,32 @@ class RhythmBackendTests(unittest.TestCase):
                 with self.assertRaises(beat_backend.BackendUnavailable): beat_backend.configuration()
                 p.write_text('{"backend":"beat-transformer"}')
                 self.assertEqual(beat_backend.configuration()['backend'],'beat-transformer')
+
+    def test_default_configuration_is_fully_musiclab_managed(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(beat_backend, 'CONFIG', Path(directory)/'missing.json'), \
+             patch.dict(os.environ, {}, clear=True):
+            config = beat_backend.configuration()
+        self.assertEqual(config['backend'], 'beat-transformer')
+        self.assertEqual(config['command'], [sys.executable, str(beat_backend.WORKER)])
+        self.assertEqual(config['path_style'], 'native')
+        self.assertEqual(Path(config['model_root']), beat_backend.MANAGED_MODEL)
+        self.assertEqual(Path(config['checkpoint']), beat_backend.MANAGED_CHECKPOINT)
+        serialized = json.dumps(config).lower()
+        self.assertNotIn('chord'+'miniapp', serialized)
+        self.assertNotIn('comfymax-'+'audio-chunker', serialized)
+        self.assertNotIn('wsl', serialized)
+
+    def test_legacy_external_paths_are_migrated_to_managed_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'config.json'
+            path.write_text(json.dumps(dict(backend='beat-transformer',
+                command=['wsl.exe', '/other/repository/python'],
+                model_root='/other/repository/model')), encoding='utf-8')
+            with patch.dict(os.environ, COMFYMAX_RHYTHM_CONFIG=str(path)):
+                config = beat_backend.configuration()
+        self.assertEqual(config['command'][0], sys.executable)
+        self.assertEqual(Path(config['model_root']), beat_backend.MANAGED_MODEL)
 
     def test_silent_input_does_not_acquire_neural_grid(self):
         with patch.object(beat_backend,'infer',return_value=response()), patch.object(rhythm,'analyze',return_value=(None,[])):

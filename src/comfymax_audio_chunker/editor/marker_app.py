@@ -24,6 +24,7 @@ from .transcript_panel import TranscriptPanel
 from .lyrics_panel import LyricsPanel
 from .settings_panel import SettingsPanel
 from .generation_panel import GenerationPanel
+from .style_presets import StylePresetsPanel
 from .audiocpp_runtime import AudioCppRuntime
 from .exporter import export_project,validate_scenes,ExportValidationError
 
@@ -80,7 +81,7 @@ def separate_song(song,destination):
     return open_audio(run/'analysis.json',destination)
 
 
-class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, SettingsPanel, GenerationPanel):
+class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, SettingsPanel, GenerationPanel, StylePresetsPanel):
     def __init__(self):
         super().__init__(); apply_theme(self); self.doc=None; self.transport=None; self.peaks={}; self.selected_marker=None
         self.dirty=False; self.busy=False; self.jobs=[]; self.history=QUndoStack(self)
@@ -132,6 +133,7 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, Settin
         self.views.addTab(self.score_panel.abc_view, 'ABC')
         self.build_generation(); self.views.addTab(self.generation_pane,'Music Generation')
         self.build_settings(); self.views.addTab(self.settings_pane,'Settings')
+        self.build_style_presets(); self.views.addTab(self.style_presets_pane,'Style Presets')
         self.views.currentChanged.connect(self.change_notation_view)
         self.audiocpp_runtime=AudioCppRuntime(self)
         self.audiocpp_runtime.status_changed.connect(self.set_audiocpp_status)
@@ -528,7 +530,7 @@ def main():
     args=parser.parse_args()
     if bool(args.import_analysis)!=bool(args.destination): parser.error('--import-analysis requires --destination')
     app=QApplication(sys.argv[:1]); app.setStyle('Fusion'); app.setFont(QFont('Segoe UI',10))
-    window=MarkerEditor(); window.show()
+    window=MarkerEditor(); window.showMaximized()
     if args.import_analysis: QTimer.singleShot(0,lambda:window.load(args.import_analysis,args.destination))
     elif args.project: QTimer.singleShot(0,lambda:window.load(args.project))
     return app.exec()

@@ -1,13 +1,14 @@
 """Original and editable Working ABC views, disconnected from the transport."""
 import re
 from pathlib import Path
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit, QFileDialog, QMessageBox
 from .score_source import ScoreDocument, SheetSageABCSource
 from .abc_transpose import ABCTransposeError, MAX_SEMITONES, transpose_abc
 
 
 class ScorePanel(QWidget):
+    vocalNotesRequested = Signal(str)
     def __init__(self, parent=None):
         super().__init__(parent)
         self.renderer = None
@@ -54,15 +55,10 @@ class ScorePanel(QWidget):
         if not document or document.error:
             self.status.setText(document.error if document else 'No SheetSage score available.')
             return
-        from .vocal_note_editor import VocalNoteEditor
-        try:
-            dialog = VocalNoteEditor(self.abc.toPlainText(), self)
-        except ValueError as exc:
-            self.status.setText('Vocal Note Editor: ' + str(exc))
-            return
-        if dialog.exec() != dialog.Accepted or dialog.result_abc is None:
-            return
-        text = dialog.result_abc
+        self.vocalNotesRequested.emit(self.abc.toPlainText())
+
+    def apply_vocal_notes(self, text):
+        """Commit a Vocal Notes page result to the current Working ABC."""
         self.document = ScoreDocument(text.encode('utf-8'), 'Working ABC')
         self.abc.blockSignals(True); self.abc.setPlainText(text); self.abc.blockSignals(False)
         self.preview_working()

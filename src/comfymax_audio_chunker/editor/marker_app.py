@@ -25,6 +25,7 @@ from .lyrics_panel import LyricsPanel
 from .settings_panel import SettingsPanel
 from .generation_panel import GenerationPanel
 from .style_presets import StylePresetsPanel
+from .vocal_note_editor import VocalNoteEditor
 from .audiocpp_runtime import AudioCppRuntime
 from .exporter import export_project,validate_scenes,ExportValidationError
 
@@ -131,6 +132,10 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, Settin
         self.views.addTab(splitter, 'Timeline')
         self.views.addTab(self.score_panel, 'Score')
         self.views.addTab(self.score_panel.abc_view, 'ABC')
+        self.vocal_notes_page=VocalNoteEditor(parent=self)
+        self.vocal_notes_page.abcApplied.connect(self.apply_vocal_notes)
+        self.score_panel.vocalNotesRequested.connect(self.open_vocal_notes)
+        self.views.addTab(self.vocal_notes_page, 'Vocal Notes')
         self.build_generation(); self.views.addTab(self.generation_pane,'Music Generation')
         self.build_settings(); self.views.addTab(self.settings_pane,'Settings')
         self.build_style_presets(); self.views.addTab(self.style_presets_pane,'Style Presets')
@@ -179,24 +184,63 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, Settin
         self.views.tabBar().setTabButton(1, QTabBar.ButtonPosition.LeftSide, self.analyze_music_button)
         self.progress=QProgressBar(); self.progress.setRange(0,0); self.progress.hide(); layout.addWidget(self.progress)
         self.status=QLabel('Load a song for local Demucs separation, or open an existing project.'); self.status.setWordWrap(True); layout.addWidget(self.status)
-        self.content.setEnabled(False); self.save_button.setEnabled(False); self.save_as_button.setEnabled(False)
+        self.save_button.setEnabled(False); self.save_as_button.setEnabled(False)
         self.autosave=QTimer(self); self.autosave.setSingleShot(True); self.autosave.setInterval(1200); self.autosave.timeout.connect(lambda:self.save(True))
         self.timer=QTimer(self); self.timer.setInterval(40); self.timer.timeout.connect(self.tick); self.timer.start()
-        for key,slot in [('Ctrl+S',lambda:self.save()),('Ctrl+Z',self.history.undo),('Ctrl+Y',self.history.redo),('Space',self.toggle),('M',self.add_at_playhead),('Escape',self.stop)]:
+        for key,slot in [('Ctrl+S',lambda:self.save()),('Ctrl+Z',self.undo_current),('Ctrl+Y',self.history.redo),('Space',self.toggle),('M',self.add_at_playhead),('Escape',self.stop)]:
             action=QAction(self); action.setShortcut(key); action.triggered.connect(lambda checked=False,s=slot,k=key:self.shortcut(k,s)); self.addAction(action)
+        self._update_workspace_access()
+        self.views.blockSignals(True); self.views.setCurrentWidget(self.generation_pane); self.views.blockSignals(False)
+        self.refresh_generation_inputs()
 
     @staticmethod
     def button(layout,text,slot):
         b=QPushButton(text); b.clicked.connect(slot); layout.addWidget(b); return b
 
     def change_notation_view(self, index):
+        if self.views.widget(index) is not self.vocal_notes_page:
+            self.vocal_notes_page.stop()
         if index == 1:
             self.score_panel.show_score()
         elif index == 2:
             self.score_panel.load_source()
+        elif self.views.widget(index) is self.vocal_notes_page:
+            self.load_vocal_notes_page()
         elif self.views.widget(index) is self.generation_pane:
             self.refresh_generation_inputs()
             self.audiocpp_runtime.ensure_started()
+
+    def load_vocal_notes_page(self):
+        document = self.score_panel.working_document()
+        if not document or document.error:
+            self.status.setText(document.error if document else 'No SheetSage score available.')
+            return False
+        text = self.score_panel.abc.toPlainText()
+        if self.vocal_notes_page.has_changes and self.vocal_notes_page.original_abc != text:
+            self.status.setText('Vocal Notes has unapplied edits; Apply or Revert them before loading changed Working ABC.')
+            return False
+        try:
+            self.vocal_notes_page.load_abc(text)
+        except ValueError as exc:
+            self.status.setText('Vocal Note Editor: ' + str(exc)); return False
+        return True
+
+    def open_vocal_notes(self, abc_text):
+        if self.vocal_notes_page.has_changes and self.vocal_notes_page.original_abc != abc_text:
+            answer=QMessageBox.question(self,'Unapplied Vocal Notes',
+                'Working ABC changed while Vocal Notes has unapplied edits. Revert those edits and reload Working ABC?',
+                QMessageBox.Yes|QMessageBox.No,QMessageBox.No)
+            if answer != QMessageBox.Yes: return
+            self.vocal_notes_page.revert_changes()
+        try:
+            self.vocal_notes_page.load_abc(abc_text)
+        except ValueError as exc:
+            self.status.setText('Vocal Note Editor: ' + str(exc)); return
+        self.views.setCurrentWidget(self.vocal_notes_page)
+
+    def apply_vocal_notes(self, text):
+        self.score_panel.apply_vocal_notes(text)
+        self.status.setText('Vocal Notes applied to Working ABC.')
 
     @staticmethod
     def table(labels):
@@ -211,14 +255,35 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, Settin
         if key in ('M','Space','Ctrl+Z','Ctrl+Y') and isinstance(QApplication.focusWidget(),(QLineEdit,QAbstractSpinBox,QTextEdit)): return
         slot()
 
+    def undo_current(self):
+        if self.views.currentWidget() is self.vocal_notes_page:
+            self.vocal_notes_page.undo()
+        else:
+            self.history.undo()
+
     def set_busy(self,value,message=''):
-        self.busy=value; self.progress.setVisible(value); self.content.setEnabled(not value and self.doc is not None)
+        self.busy=value; self.progress.setVisible(value); self._update_workspace_access()
         for b in (self.load_button,self.open_button,self.import_button): b.setEnabled(not value)
         for b in (self.save_button,self.save_as_button): b.setEnabled(not value and self.doc is not None)
         if hasattr(self, 'export_midi_button'):
             from ..music.sheetsage_midi import available
             self.export_midi_button.setEnabled(not value and self.doc is not None and available(self.doc.data.get('music_analysis', {}).get('sheet_sage')))
         if message: self.status.setText(message)
+
+    def _update_workspace_access(self):
+        """Keep standalone generation available; gate only project/audio tools."""
+        project_ready = self.doc is not None and not self.busy
+        standalone_ready = not self.busy
+        self.content.setEnabled(True)
+        for widget in (self.views.widget(0), self.score_panel, self.score_panel.abc_view,
+                       self.vocal_notes_page, self.settings_pane, self.style_presets_pane):
+            index=self.views.indexOf(widget)
+            if index >= 0: self.views.setTabEnabled(index,project_ready)
+        generation_index=self.views.indexOf(self.generation_pane)
+        if generation_index >= 0: self.views.setTabEnabled(generation_index,standalone_ready)
+        for control in (self.play_button,self.source,self.loop,self.follow_playhead,
+                        self.volume,self.overview,self.analyze_music_button):
+            control.setEnabled(project_ready)
 
     def run_task(self,operation,ready,message):
         self.set_busy(True,message); job=Task(operation,self); self.jobs.append(job)
@@ -255,6 +320,7 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, Settin
         if self.transport: self.transport.close()
         if self.doc: self.doc.close()
         self.doc,arrays,self.peaks=result[:3]
+        self.vocal_notes_page.clear()
         self.classifier=result[3] if len(result)>3 else VocalActivity(arrays,self.doc.data['timeline']['sample_rate'])
         self.doc.data['marker_editor']=initial_state(self.doc.data,self.classifier)
         self.transport=Transport(arrays,self.doc.data['timeline']['sample_rate']); settings=self.doc.data['settings']
@@ -515,6 +581,7 @@ class MarkerEditor(QMainWindow, MusicPanel, TranscriptPanel, LyricsPanel, Settin
         if not self.resolve_lyrics_editor_changes(): event.ignore(); return
         if not self.prepare_leave(): event.ignore(); return
         self._cleanup_generation_preview()
+        self.vocal_notes_page.stop()
         self.audiocpp_runtime.stop()
         self.score_panel.close_renderer()
         if self.transport: self.transport.close()

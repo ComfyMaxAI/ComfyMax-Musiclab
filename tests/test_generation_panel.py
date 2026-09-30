@@ -131,6 +131,18 @@ class GenerationPanelTests(unittest.TestCase):
         self.assertEqual(h.generation_lyrics.toPlainText(),'[verse1]\nExtern')
         self.assertFalse(target.exists())
 
+    def test_standalone_lyrics_and_abc_files_load_without_project(self):
+        h=self.host; h.doc=None
+        lyrics=Path(self.temp.name)/'lyrics.txt'; lyrics.write_text('[verse1]\nStandalone',encoding='utf-8')
+        abc=Path(self.temp.name)/'score.abc'; abc.write_text('X:1\nK:C\nCDEF|',encoding='utf-8')
+        with patch.object(QFileDialog,'getOpenFileName',return_value=(str(lyrics),'Text files (*.txt)')):
+            h.load_generation_lyrics()
+        self.assertEqual(h.generation_lyrics.toPlainText(),'[verse1]\nStandalone')
+        with patch.object(QFileDialog,'getOpenFileName',return_value=(str(abc),'ABC notation (*.abc)')):
+            h.load_generation_abc()
+        self.assertEqual(h.generation_abc.toPlainText(),'X:1\nK:C\nCDEF|')
+        self.assertTrue(h.generation_use_abc.isChecked())
+
     def test_abc_unavailable_defaults_checkbox_off(self):
         self.host.score_panel.source=Source(''); self.host.refresh_generation_inputs()
         self.assertFalse(self.host.generation_use_abc.isChecked()); self.assertEqual(self.host.generation_abc.toPlainText(),'')
@@ -349,10 +361,21 @@ class GenerationPanelTests(unittest.TestCase):
     def test_main_window_starts_with_music_generation_tab(self):
         from comfymax_audio_chunker.editor.marker_app import MarkerEditor
         values=dict(sheet_sage_path='',yue2_main_path='selected-yue2',yue2_vae_path='',whisper_model='medium')
-        with patch('comfymax_audio_chunker.editor.settings_panel.load_settings',return_value=values): window=MarkerEditor()
+        with patch('comfymax_audio_chunker.editor.settings_panel.load_settings',return_value=values), \
+             patch('comfymax_audio_chunker.editor.audiocpp_runtime.AudioCppRuntime.ensure_started'):
+            window=MarkerEditor()
         self.addCleanup(window.close); self.addCleanup(window.deleteLater)
         labels=[window.views.tabText(i) for i in range(window.views.count())]
         self.assertIn('Music Generation',labels)
+        generation_index=window.views.indexOf(window.generation_pane)
+        self.assertTrue(window.views.isTabEnabled(generation_index))
+        self.assertIs(window.views.currentWidget(),window.generation_pane)
+        self.assertTrue(window.generation_lyrics.isEnabled())
+        self.assertTrue(window.generation_abc.isEnabled())
+        self.assertIsNone(window.doc)
+        self.assertFalse(window.views.isTabEnabled(window.views.indexOf(window.views.widget(0))))
+        self.assertFalse(window.play_button.isEnabled())
+        self.assertFalse(window.analyze_music_button.isEnabled())
         self.assertFalse(hasattr(window,'transcript_toggle')); self.assertGreaterEqual(window.tabs.indexOf(window.transcript_pane),0)
         self.assertFalse(hasattr(window,'include_sheetsage'))
         with patch.object(window.audiocpp_runtime,'ensure_started'):
@@ -361,6 +384,20 @@ class GenerationPanelTests(unittest.TestCase):
         directory=Path(window.generation_preview_dir.path()); preview=directory/'closing.wav'; preview.write_bytes(b'audio')
         window.generation_finished({'path':preview}); window.close(); self.app.processEvents()
         self.assertFalse(preview.exists()); self.assertFalse(directory.exists())
+
+    def test_project_enables_existing_pages_and_keeps_generation_available(self):
+        from comfymax_audio_chunker.editor.marker_app import MarkerEditor
+        values=dict(sheet_sage_path='',yue2_main_path='selected-yue2',yue2_vae_path='',whisper_model='medium')
+        with patch('comfymax_audio_chunker.editor.settings_panel.load_settings',return_value=values), \
+             patch('comfymax_audio_chunker.editor.audiocpp_runtime.AudioCppRuntime.ensure_started'):
+            window=MarkerEditor()
+        self.addCleanup(window.close); self.addCleanup(window.deleteLater)
+        self.addCleanup(setattr,window,'doc',None)
+        window.doc=SimpleNamespace(data={'music_analysis':{}},root=Path(self.temp.name),duration=10)
+        window._update_workspace_access()
+        self.assertTrue(window.views.isTabEnabled(window.views.indexOf(window.views.widget(0))))
+        self.assertTrue(window.views.isTabEnabled(window.views.indexOf(window.generation_pane)))
+        self.assertTrue(window.play_button.isEnabled())
 
     def test_single_analyze_music_button_between_timeline_and_score_keeps_callback(self):
         from comfymax_audio_chunker.editor.marker_app import MarkerEditor

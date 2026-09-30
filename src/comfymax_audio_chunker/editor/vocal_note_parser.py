@@ -31,6 +31,7 @@ class VocalNote:
     tied_to_next: bool = False
     tie_before_range: tuple[int, int] | None = None
     tie_after_range: tuple[int, int] | None = None
+    complex_timing: bool = False
 
     @property
     def rest_token(self):
@@ -43,6 +44,9 @@ class VocalPart:
     notes: list[VocalNote]
     total_duration: Fraction
     tempo_bpm: Fraction = Fraction(120)
+    meter: Fraction = Fraction(4, 4)
+    unit_length: Fraction = Fraction(1, 8)
+    rests: list = None
 
     def delete_notes(self, notes):
         """Replace selected source tokens only, preserving every other byte/char."""
@@ -58,6 +62,62 @@ class VocalPart:
         for (start, end), replacement in sorted(ranges.items(), reverse=True):
             result = result[:start] + replacement + result[end:]
         return result
+
+    def source_edit(self, replacements):
+        """Apply exact source-range replacements and reparse the resulting ABC."""
+        result = self.abc
+        for (start, end), replacement in sorted(replacements.items(), reverse=True):
+            result = result[:start] + replacement + result[end:]
+        return result
+
+
+@dataclass
+class VocalRest:
+    start: Fraction
+    duration: Fraction
+    abc_source_range: tuple[int, int]
+    abc_token: str
+    duration_text: str
+    complex_timing: bool = False
+
+
+def abc_length_text(duration, unit_length):
+    """Encode an exact duration using the active ABC unit note length."""
+    ratio = Fraction(duration, unit_length)
+    if ratio == 1:
+        return ''
+    if ratio.denominator == 1:
+        return str(ratio.numerator)
+    if ratio.numerator == 1 and ratio.denominator & (ratio.denominator - 1) == 0:
+        return '/' * (ratio.denominator.bit_length() - 1)
+    return f'{ratio.numerator}/{ratio.denominator}'
+
+
+def abc_pitch_text(pitch):
+    """Return an unambiguous ABC pitch (explicit accidental where required)."""
+    pitch = int(pitch)
+    pc = pitch % 12
+    letter, accidental = {
+        0: ('C', '='), 1: ('C', '^'), 2: ('D', '='), 3: ('D', '^'),
+        4: ('E', '='), 5: ('F', '='), 6: ('F', '^'), 7: ('G', '='),
+        8: ('G', '^'), 9: ('A', '='), 10: ('A', '^'), 11: ('B', '='),
+    }[pc]
+    octave = pitch // 12 - 1
+    if octave >= 5:
+        letter = letter.lower()
+        marks = "'" * (octave - 5)
+    else:
+        marks = ',' * (4 - octave)
+    return accidental + letter + marks
+
+
+def note_token(note, pitch=None, duration=None, unit_length=Fraction(1, 8)):
+    return abc_pitch_text(note.pitch if pitch is None else pitch) + abc_length_text(
+        note.duration if duration is None else duration, unit_length)
+
+
+def rest_token(rest, duration, unit_length):
+    return rest.abc_token[0] + abc_length_text(duration, unit_length)
 
 
 def _length(text):
@@ -148,6 +208,7 @@ def parse_vocal_notes(abc):
     cursor = Fraction(0)
     maximum = Fraction(0)
     notes = []
+    rests = []
     tuplet_factor, tuplet_left = Fraction(1), 0
     broken_next = Fraction(1)
     previous = None
@@ -240,6 +301,7 @@ def parse_vocal_notes(abc):
                 long = Fraction(2 ** (count + 1) - 1, 2 ** count)
                 old = previous.duration
                 previous.duration *= long if char == '>' else short
+                previous.complex_timing = True
                 cursor += previous.duration - old
                 maximum = max(maximum, cursor)
                 broken_next = short if char == '>' else long
@@ -262,6 +324,7 @@ def parse_vocal_notes(abc):
             match = note_match or rest_match
             if match:
                 factor = tuplet_factor if tuplet_left else Fraction(1)
+                complex_timing = factor != 1 or broken_next != 1
                 duration = base * _length(match.group('len')) * factor * broken_next
                 broken_next = Fraction(1)
                 if tuplet_left:
@@ -271,9 +334,12 @@ def parse_vocal_notes(abc):
                     start, end = offset + match.start(), offset + match.end()
                     previous = VocalNote(cursor, duration, _pitch(match, key_accidentals, measure_accidentals),
                                          (start, end), match.group(0), match.group('len') or '', pending_tie,
-                                         False, pending_tie_range if pending_tie else None, None)
+                                         False, pending_tie_range if pending_tie else None, None, complex_timing)
                     notes.append(previous)
                 else:
+                    start, end = offset + match.start(), offset + match.end()
+                    rests.append(VocalRest(cursor, duration, (start, end), match.group(0),
+                                           match.group('len') or '', complex_timing))
                     previous = None
                 pending_tie = False
                 pending_tie_range = None
@@ -283,4 +349,10 @@ def parse_vocal_notes(abc):
                 continue
             i += 1
         offset += len(raw_line)
-    return VocalPart(abc, notes, maximum, tempo_bpm)
+    try:
+        top, bottom = meter.split('/', 1)
+        meter_fraction = Fraction(int(top), int(bottom))
+    except (ValueError, ZeroDivisionError):
+        meter_fraction = Fraction(4, 4)
+    return VocalPart(abc, notes, maximum, tempo_bpm, meter_fraction,
+                     unit or _default_length(meter), rests)

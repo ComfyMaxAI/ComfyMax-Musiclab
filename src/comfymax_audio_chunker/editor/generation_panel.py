@@ -118,6 +118,10 @@ class GenerationPanel:
         self.generation_primary_row.addLayout(nar_column,1); controls.addWidget(primary)
         self.generation_use_abc=QCheckBox('Use MusicLab ABC score'); controls.addWidget(self.generation_use_abc)
         self.generation_abc_toggle,self.generation_abc_box=self._collapsible(controls,'ABC Preview')
+        abc_actions=QHBoxLayout(); abc_actions.addStretch()
+        self.generation_load_abc=QPushButton('Load ABC')
+        self.generation_load_abc.clicked.connect(self.load_generation_abc); abc_actions.addWidget(self.generation_load_abc)
+        self.generation_abc_box.addLayout(abc_actions)
         self.generation_abc=QPlainTextEdit(); self.generation_abc.setPlaceholderText('No MusicLab ABC score available.')
         self.generation_abc.textChanged.connect(lambda:self._generation_edited('abc')); self.generation_abc_box.addWidget(self.generation_abc)
         self.semantic_controls=self._sampling_section(controls,'Semantic sampling','semantic')
@@ -204,11 +208,9 @@ class GenerationPanel:
 
     def load_generation_lyrics(self):
         path=self._generation_lyrics_path()
-        if path is None:
-            QMessageBox.information(self.generation_pane,'Load Lyrics','Open a MusicLab project first.')
-            return
-        if not path.exists():
-            name,_=QFileDialog.getOpenFileName(self.generation_pane,'Load Lyrics',str(path.parent),
+        if path is None or not path.exists():
+            start=QDir.homePath() if path is None else str(path.parent)
+            name,_=QFileDialog.getOpenFileName(self.generation_pane,'Load Lyrics',start,
                                                'Text files (*.txt);;All files (*)')
             if not name: return
             path=Path(name)
@@ -218,6 +220,21 @@ class GenerationPanel:
             QMessageBox.warning(self.generation_pane,'Load Lyrics failed',str(exc)); return
         self.generation_lyrics.setPlainText(text)
         self.generation_output_status.setText('Loaded lyrics: '+path.name)
+
+    def load_generation_abc(self):
+        doc=getattr(self,'doc',None)
+        start=str(doc.root) if doc is not None else QDir.homePath()
+        name,_=QFileDialog.getOpenFileName(self.generation_pane,'Load ABC',start,
+                                           'ABC notation (*.abc);;Text files (*.txt);;All files (*)')
+        if not name: return
+        try:
+            text=Path(name).read_text(encoding='utf-8-sig')
+        except (OSError,UnicodeError) as exc:
+            QMessageBox.warning(self.generation_pane,'Load ABC failed',str(exc)); return
+        self.generation_abc.setPlainText(text)
+        self.generation_use_abc.setChecked(bool(text.strip()))
+        self.generation_abc_toggle.setChecked(True)
+        self.generation_output_status.setText('Loaded ABC: '+Path(name).name)
 
     def randomize_generation_seed(self):
         self.generation_seed.setValue(secrets.randbelow(2_147_483_648))

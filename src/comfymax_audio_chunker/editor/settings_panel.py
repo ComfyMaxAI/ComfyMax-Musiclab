@@ -1,5 +1,6 @@
 """Application-wide model locations; no runtime or model loading happens here."""
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -14,7 +15,8 @@ from .audiocpp_runtime import YUE2_MAIN,YUE2_MODEL_ROOT,YUE2_VAE
 
 
 SETTINGS_KEYS=('sheet_sage_path','yue2_main_path','yue2_vae_path','whisper_model')
-GENERATION_DEFAULTS={'yue2_semantic_guidance':1.5,'yue2_nar_steps':16}
+GENERATION_DEFAULTS={'yue2_semantic_guidance':1.5,'yue2_nar_steps':16,
+    'yue2_ar_lora':'','yue2_ar_lora_scale':1.0,'yue2_nar_lora':'','yue2_nar_lora_scale':1.0}
 CONFIG_KEYS=SETTINGS_KEYS+tuple(GENERATION_DEFAULTS)
 YUE2_PACKAGES={
     'main':(
@@ -97,6 +99,12 @@ def load_settings(path=None):
             if isinstance(stored,dict):
                 for key in SETTINGS_KEYS:
                     if isinstance(stored.get(key),str): values[key]=stored[key]
+                for kind in ('ar','nar'):
+                    key='yue2_'+kind+'_lora'
+                    if isinstance(stored.get(key),str): values[key]=stored[key]
+                    scale=stored.get(key+'_scale')
+                    if type(scale) in (int,float) and math.isfinite(scale):
+                        values[key+'_scale']=max(0.0,min(2.0,float(scale)))
                 guidance=stored.get('yue2_semantic_guidance')
                 steps=stored.get('yue2_nar_steps')
                 if isinstance(guidance,(int,float)) and not isinstance(guidance,bool):
@@ -117,6 +125,10 @@ def save_settings(values,path=None):
     payload={key:str(values.get(key,'')) for key in SETTINGS_KEYS}
     payload.update(yue2_semantic_guidance=float(values.get('yue2_semantic_guidance',1.5)),
                    yue2_nar_steps=int(values.get('yue2_nar_steps',16)))
+    for kind in ('ar','nar'):
+        key='yue2_'+kind+'_lora'
+        payload[key]=str(values.get(key,'') or '')
+        payload[key+'_scale']=float(values.get(key+'_scale',1.0))
     path.parent.mkdir(parents=True,exist_ok=True)
     temporary=path.with_name(path.name+'.tmp')
     temporary.write_text(json.dumps(payload,indent=2,ensure_ascii=False),encoding='utf-8')

@@ -6,11 +6,13 @@ import shutil
 import subprocess
 import wave
 
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QDir,Qt,QTemporaryDir,QThread,QTimer,Signal,QUrl
 from PySide6.QtMultimedia import QAudioOutput,QMediaPlayer
 from PySide6.QtWidgets import (QCheckBox,QComboBox,QDoubleSpinBox,QFormLayout,QGroupBox,
                                QFileDialog,QHBoxLayout,QLabel,QLineEdit,QMessageBox,QPlainTextEdit,
                                QPushButton,QScrollArea,QSlider,QSpinBox,QSplitter,QVBoxLayout,QWidget)
+from .yue2_lora import LORA_ROOT,scan_loras,lora_metadata
 from .lyrics_panel import insert_section
 from .settings_panel import load_settings,save_settings
 from .style_presets import DEFAULT_STYLE_PRESETS,StylePresetStore
@@ -116,6 +118,7 @@ class GenerationPanel:
         self.generation_nar_steps.valueChanged.connect(lambda value:self._save_generation_setting('yue2_nar_steps',value)); nar_column.addWidget(self.generation_nar_steps)
         self.generation_primary_row.addLayout(route_column,2); self.generation_primary_row.addLayout(guidance_column,5)
         self.generation_primary_row.addLayout(nar_column,1); controls.addWidget(primary)
+        self._build_lora_controls(controls)
         self.generation_use_abc=QCheckBox('Use MusicLab ABC score'); controls.addWidget(self.generation_use_abc)
         self.generation_abc_toggle,self.generation_abc_box=self._collapsible(controls,'ABC Preview')
         abc_actions=QHBoxLayout(); abc_actions.addStretch()
@@ -130,7 +133,7 @@ class GenerationPanel:
         self.generation_generate=QPushButton('Generate'); self.generation_generate.clicked.connect(self.generate_music); controls.addWidget(self.generation_generate)
 
         self.generation_output_message=QLabel('Generated audio will appear here.'); self.generation_output_message.setWordWrap(True); out.addWidget(self.generation_output_message)
-        self.generation_output_status=QLabel('No generated audio.'); out.addWidget(self.generation_output_status)
+        self.generation_output_status=QLabel('No generated audio.'); self.generation_output_status.setWordWrap(True); out.addWidget(self.generation_output_status)
         timeline=QHBoxLayout(); self.generation_time=QLabel('0:00 / 0:00')
         self.generation_seek=QSlider(Qt.Horizontal); self.generation_seek.setRange(0,0); self.generation_seek.setEnabled(False)
         timeline.addWidget(self.generation_time); timeline.addWidget(self.generation_seek,1); out.addLayout(timeline)
@@ -158,6 +161,59 @@ class GenerationPanel:
         self.generation_gpu_timer.setInterval(1000); self.generation_gpu_timer.timeout.connect(self.update_gpu_info)
         self.generation_gpu_timer.start()
         self.generation_pane.destroyed.connect(self._cleanup_generation_preview)
+
+    def _build_lora_controls(self,parent):
+        self.generation_lora_root=Path(getattr(self,'generation_lora_root',LORA_ROOT))
+        group=QGroupBox('LoRA'); body=QVBoxLayout(group); self.generation_loras={}
+        for kind in ('ar','nar'):
+            row=QHBoxLayout(); row.addWidget(QLabel(kind.upper()+' LoRA'))
+            combo=QComboBox(); combo.setMinimumContentsLength(12)
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setAccessibleName(kind.upper()+' LoRA'); row.addWidget(combo,1)
+            scale=QDoubleSpinBox(); scale.setRange(0,2); scale.setDecimals(2); scale.setSingleStep(.1)
+            scale.setValue(self.model_settings.get('yue2_'+kind+'_lora_scale',1.0))
+            scale.setAccessibleName(kind.upper()+' LoRA strength'); row.addWidget(QLabel('Strength')); row.addWidget(scale)
+            scale.setToolTip('Default 1.0; 0 disables the adapter. NAR full projection replacements remain at full strength above zero.')
+            self.generation_loras[kind]=(combo,scale); body.addLayout(row)
+            combo.currentIndexChanged.connect(lambda _,k=kind:self._lora_changed(k))
+            scale.valueChanged.connect(lambda value,k=kind:self._save_generation_setting('yue2_'+k+'_lora_scale',value))
+        actions=QHBoxLayout(); actions.addStretch()
+        refresh=QPushButton('Refresh'); refresh.clicked.connect(self.refresh_generation_loras); actions.addWidget(refresh)
+        folder=QPushButton('Open Folder'); folder.clicked.connect(self.open_generation_lora_folder); actions.addWidget(folder)
+        body.addLayout(actions); self.generation_lora_status=QLabel(); self.generation_lora_status.setWordWrap(True)
+        body.addWidget(self.generation_lora_status); parent.addWidget(group); self.refresh_generation_loras()
+
+    def _lora_changed(self,kind):
+        combo,scale=self.generation_loras[kind]; scale.setEnabled(bool(combo.currentData()))
+        self._save_generation_setting('yue2_'+kind+'_lora',combo.currentData() or '')
+
+    def refresh_generation_loras(self,*_):
+        try: adapters,errors=scan_loras(self.generation_lora_root)
+        except OSError as exc: adapters={'ar':[],'nar':[]}; errors=[str(exc)]
+        removed=[]
+        for kind,(combo,scale) in self.generation_loras.items():
+            key='yue2_'+kind+'_lora'; previous=self.model_settings.get(key,'')
+            combo.blockSignals(True); combo.clear(); combo.addItem('None',None)
+            for path in adapters[kind]: combo.addItem(path.name,str(path.resolve()))
+            index=combo.findData(previous); combo.setCurrentIndex(max(0,index)); combo.blockSignals(False)
+            scale.setEnabled(bool(combo.currentData()))
+            if previous and index<0:
+                removed.append(kind.upper()+' LoRA unavailable; using None: '+Path(previous).name)
+                self._save_generation_setting(key,'')
+        self.generation_lora_status.setText('\n'.join(removed+errors))
+        self.generation_lora_status.setVisible(bool(removed or errors))
+
+    def open_generation_lora_folder(self):
+        try:
+            self.generation_lora_root.mkdir(parents=True,exist_ok=True)
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.generation_lora_root.resolve()))):
+                raise OSError('Could not open the LoRA folder.')
+        except OSError as exc:
+            self.generation_lora_status.setText(str(exc)); self.generation_lora_status.show()
+
+    def generation_lora_config(self):
+        return {key:value for kind,(combo,scale) in self.generation_loras.items()
+                for key,value in ((kind+'_lora',combo.currentData()),(kind+'_lora_scale',scale.value()))}
 
     @staticmethod
     def _collapsible(parent,title):
@@ -278,6 +334,7 @@ class GenerationPanel:
         self.refresh_generation_inputs()
 
     def refresh_generation_inputs(self):
+        self.refresh_generation_loras()
         model=getattr(self,'model_settings',{}).get('yue2_main_path','')
         self.generation_model.setText('Model: '+(model or 'Not configured'))
         lyrics=self.lyrics_editor.toPlainText() if hasattr(self,'lyrics_editor') else ''
@@ -302,7 +359,7 @@ class GenerationPanel:
                     seed=self.generation_seed.value(),planning_route=self.generation_route.currentText(),
                     use_musiclab_abc=self.generation_use_abc.isChecked(),abc=self.generation_abc.toPlainText(),
                     semantic_guidance=self.generation_guidance.value()/100,
-                    nar_steps=self.generation_nar_steps.value(),
+                    nar_steps=self.generation_nar_steps.value(),loras=self.generation_lora_config(),
                     semantic_sampling=values(self.semantic_controls),abc_sampling=values(self.abc_sampling_controls))
 
     def generate_music(self):
@@ -326,7 +383,8 @@ class GenerationPanel:
             'background-color:#dc2626;color:white;padding:5px 9px;border-radius:4px;font-weight:600;')
         self.generation_job=GenerationTask(
             lambda:runtime.generate_yue2(request['lyrics'],request['style'],abc,request['seed'],planning,
-                                         self.generation_preview_dir.path(),options),self.generation_pane)
+                                         self.generation_preview_dir.path(),options,
+                                         **({'lora_config':request['loras']} if any(request['loras'].get(k+'_lora') or request['loras'][k+'_lora_scale']!=1.0 for k in ('ar','nar')) else {})),self.generation_pane)
         self.generation_job.ready.connect(self.generation_finished)
         self.generation_job.failed.connect(self.generation_failed)
         self.generation_job.finished.connect(self.generation_job_finished)
@@ -337,9 +395,12 @@ class GenerationPanel:
         path=Path(result['path']); previous=self.generation_output_path
         self.generation_player.stop(); self.generation_player.setSource(QUrl())
         if previous and previous!=path:
-            try: previous.unlink(missing_ok=True)
+            try:
+                previous.unlink(missing_ok=True)
+                previous.with_suffix('.json').unlink(missing_ok=True)
             except OSError: LOG.warning('Could not remove previous YuE2 preview: %s',previous,exc_info=True)
         self.generation_output_path=path
+        self.generation_output_metadata=result.get('metadata',{})
         duration=self._wave_duration(path)
         detail=f'{duration:.2f} s' if duration is not None else 'duration unavailable'
         self.generation_output_message.setText('Generated audio preview is ready.')
@@ -409,7 +470,12 @@ class GenerationPanel:
         if not self.generation_output_path: return
         target,_=QFileDialog.getSaveFileName(self.generation_pane,'Save generated audio',
                                              self.generation_output_path.name,'Wave audio (*.wav)')
-        if target: shutil.copy2(self.generation_output_path,target)
+        if target:
+            try:
+                shutil.copy2(self.generation_output_path,target)
+                metadata=self.generation_output_path.with_suffix('.json')
+                if metadata.is_file(): shutil.copy2(metadata,Path(target).with_suffix('.json'))
+            except OSError as exc: self.generation_failed(str(exc))
 
     def _cleanup_generation_preview(self,*_):
         self.generation_output_status.setStyleSheet('')

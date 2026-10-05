@@ -11,6 +11,7 @@ from urllib.error import HTTPError,URLError
 from urllib.request import Request,urlopen
 
 from PySide6.QtCore import QObject,Signal
+from .yue2_lora import session_lora_options,active_lora_options,lora_metadata
 
 
 LOG=logging.getLogger(__name__)
@@ -88,14 +89,14 @@ class AudioCppRuntime(QObject):
     def model_install_status(self):
         return self._json_request('/v1/ui/models/install-status').get('data',[])
 
-    def load_yue2(self):
+    def load_yue2(self,lora_options=None):
         missing=validate_yue2_package()
         if missing:
             raise RuntimeError('Missing YuE2 component(s): '+', '.join(str(path) for path in missing))
         return self._json_request('/v1/models/load',{
             'id':YUE2_MODEL_ID,'path':YUE2_REGISTERED_PATH,'family':'yue2',
             'task':'gen','mode':'offline','load_options':{},
-            'session_options':{'model_gguf':YUE2_MAIN,'vae_gguf':YUE2_VAE}},timeout=300)
+            'session_options':{'model_gguf':YUE2_MAIN,'vae_gguf':YUE2_VAE,**(lora_options or {})}},timeout=300)
 
     def unload_yue2(self):
         return self._json_request('/v1/models/unload',{'id':YUE2_MODEL_ID},timeout=120)
@@ -111,14 +112,19 @@ class AudioCppRuntime(QObject):
             time.sleep(.1)
         raise RuntimeError('audio.cpp runtime is not available.')
 
-    def generate_yue2(self,lyrics,style,abc,seed,planning='off',output_dir=None,request_options=None):
+    def generate_yue2(self,lyrics,style,abc,seed,planning='off',output_dir=None,request_options=None,lora_config=None):
+        lora_options=session_lora_options(lora_config)
         self.ensure_ready()
         models=self.models()
         model=next((entry for entry in models if entry.get('id')==YUE2_MODEL_ID),None)
         if model is None:
             raise RuntimeError(f'YuE2 model {YUE2_MODEL_ID} is not registered.')
-        if not model.get('loaded'):
-            self.load_yue2()
+        # /models/load replaces the full configuration and unloads a changed session.
+        # Compare server state, not a Python cache, so failures/idle unloads cannot
+        # leave a previous adapter active, including when switching back to None.
+        if not model.get('loaded') or active_lora_options(model)!=lora_options:
+            if lora_options: self.load_yue2(lora_options)
+            else: self.load_yue2()
         options={'style':style,'cot':planning}
         if abc: options['abc']=abc
         if request_options: options.update(request_options)
@@ -140,7 +146,10 @@ class AudioCppRuntime(QObject):
         stamp=datetime.now().strftime('%Y%m%d-%H%M%S-%f')
         path=destination/f'yue2-{stamp}.wav'
         path.write_bytes(audio)
-        return {'path':path,'response':response,'request':request}
+        metadata={'model':YUE2_MODEL_ID,'request':request,'loras':lora_metadata(lora_config)}
+        metadata_path=path.with_suffix('.json')
+        metadata_path.write_text(json.dumps(metadata,indent=2,ensure_ascii=False),encoding='utf-8')
+        return {'path':path,'response':response,'request':request,'metadata':metadata,'metadata_path':metadata_path}
 
     def ensure_started(self):
         with self._lock:
